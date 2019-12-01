@@ -1,6 +1,6 @@
 FROM ubuntu:18.04
 
-MAINTAINER Hirochika ASai <panda@jar.jp>
+MAINTAINER Hirochika Asai <panda@jar.jp>
 
 ## Install build-essential and fuse
 RUN apt-get update
