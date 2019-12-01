@@ -13,5 +13,5 @@ RUN ./configure
 RUN make clean all
 
 ## Execute bash
-CMD ["bash"]
+CMD ["./advfs", "/mnt", "-f"]
 
