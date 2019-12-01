@@ -40,6 +40,7 @@
 int
 main(int argc, char *argv[])
 {
+    printf("To implement advfs.\n");
     return 0;
 }
 
