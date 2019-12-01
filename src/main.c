@@ -34,14 +34,80 @@
 #include <sys/mman.h>
 #include <stdint.h>
 
+int
+advfs_getattr(const char *path, struct stat *stbuf)
+{
+    struct fuse_context *ctx;
+    int status;
+
+    /* Reset the stat structure */
+    memset(stbuf, 0, sizeof(struct stat));
+
+    /* Get the context */
+    ctx = fuse_get_context();
+
+    if ( strcmp(path, "/") == 0 ) {
+        stbuf->st_mode = S_IFDIR | 0777;
+        stbuf->st_nlink = 2;
+        stbuf->st_uid = ctx->uid;
+        stbuf->st_gid = ctx->gid;
+        status = 0;
+    } else {
+        status = -ENOENT;
+    }
+
+    return status;
+}
+
+int
+advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+              off_t offset, struct fuse_file_info *fi)
+{
+    if ( strcmp(path, "/") != 0 ) {
+        return -ENOENT;
+    }
+
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
+
+    return 0;
+}
+
+int
+advfs_statfs(const char *path, struct statvfs *buf)
+{
+    memset(buf, 0, sizeof(struct statvfs));
+
+    buf->f_bsize = 4096;
+    buf->f_frsize = 4096;
+    buf->f_blocks = 1024;       /* in f_frsize unit */
+    buf->f_bfree = 1024;
+    buf->f_bavail = 1024;
+
+    buf->f_files = 1000;
+    buf->f_ffree = 100;
+    buf->f_favail = 100;
+
+    buf->f_fsid = 0;
+    buf->f_flag = 0;
+    buf->f_namemax = 255;
+
+    return 0;
+}
+
+static struct fuse_operations advfs_oper = {
+    .getattr    = advfs_getattr,
+    .readdir    = advfs_readdir,
+    .statfs     = advfs_statfs,
+};
+
 /*
  * main
  */
 int
 main(int argc, char *argv[])
 {
-    printf("To implement advfs.\n");
-    return 0;
+    return fuse_main(argc, argv, &advfs_oper, NULL);
 }
 
 /*
