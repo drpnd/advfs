@@ -63,14 +63,13 @@ int
 advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
               off_t offset, struct fuse_file_info *fi)
 {
-    if ( strcmp(path, "/") != 0 ) {
-        return -ENOENT;
+    if ( strcmp(path, "/") == 0 ) {
+        filler(buf, ".", NULL, 0);
+        filler(buf, "..", NULL, 0);
+        return 0;
     }
 
-    filler(buf, ".", NULL, 0);
-    filler(buf, "..", NULL, 0);
-
-    return 0;
+    return -ENOENT;
 }
 
 int
