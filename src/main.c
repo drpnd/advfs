@@ -34,6 +34,12 @@
 #include <sys/mman.h>
 #include <stdint.h>
 
+static const char *ramfs_file_path = "/test";
+static uint8_t *ramfs_file_buf = NULL;
+static size_t ramfs_file_size = 0;
+static size_t ramfs_file_max_size = 1 * 1024 * 1024;
+static time_t ramfs_file_timestamp = 1575370225;
+
 int
 advfs_getattr(const char *path, struct stat *stbuf)
 {
@@ -52,6 +58,23 @@ advfs_getattr(const char *path, struct stat *stbuf)
         stbuf->st_uid = ctx->uid;
         stbuf->st_gid = ctx->gid;
         status = 0;
+    } else if ( strcmp(path, ramfs_file_path) == 0 ) {
+        stbuf->st_mode = S_IFREG | 0666;
+        stbuf->st_nlink = 1;
+        stbuf->st_size = strlen(ramfs_file_path);
+        stbuf->st_atime = (time_t)ramfs_file_timestamp;
+        stbuf->st_mtime = (time_t)ramfs_file_timestamp;
+        stbuf->st_ctime = (time_t)ramfs_file_timestamp;
+#ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
+        stbuf->st_birthtime = (time_t)ramfs_file_timestamp;
+#endif
+        stbuf->st_uid = ctx->uid;
+        stbuf->st_gid = ctx->gid;
+        stbuf->st_rdev = 0;
+        stbuf->st_size = ramfs_file_size;
+        stbuf->st_blksize = 4096;
+        stbuf->st_blocks = (ramfs_file_size + 4095) / 4096;
+        status = 0;
     } else {
         status = -ENOENT;
     }
@@ -66,6 +89,7 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     if ( strcmp(path, "/") == 0 ) {
         filler(buf, ".", NULL, 0);
         filler(buf, "..", NULL, 0);
+        filler(buf, ramfs_file_path + 1, NULL, 0);
         return 0;
     }
 
@@ -75,17 +99,21 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 int
 advfs_statfs(const char *path, struct statvfs *buf)
 {
+    ssize_t used;
+
     memset(buf, 0, sizeof(struct statvfs));
+
+    used = (ramfs_file_size + 4096 - 1) / 4096;
 
     buf->f_bsize = 4096;
     buf->f_frsize = 4096;
     buf->f_blocks = 1024;       /* in f_frsize unit */
-    buf->f_bfree = 1024;
-    buf->f_bavail = 1024;
+    buf->f_bfree = 1024 - used;
+    buf->f_bavail = 1024 - used;
 
     buf->f_files = 1000;
-    buf->f_ffree = 100;
-    buf->f_favail = 100;
+    buf->f_ffree = 100 - 1;
+    buf->f_favail = 100 - 1;
 
     buf->f_fsid = 0;
     buf->f_flag = 0;
