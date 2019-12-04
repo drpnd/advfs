@@ -136,7 +136,6 @@ int
 advfs_read(const char *path, char *buf, size_t size, off_t offset,
            struct fuse_file_info *fi)
 {
-    struct fuse_context *ctx;
     int perm;
 
     if ( strcmp(path, ramfs_file_path) != 0 ) {
@@ -147,9 +146,6 @@ advfs_read(const char *path, char *buf, size_t size, off_t offset,
     if ( perm != O_RDONLY && perm != O_RDWR ) {
         return -EACCES;
     }
-
-    /* Get the context */
-    ctx = fuse_get_context();
 
     if ( offset < (off_t)ramfs_file_size ) {
         if ( offset + size > ramfs_file_size ) {
@@ -167,7 +163,6 @@ int
 advfs_write(const char *path, const char *buf, size_t size, off_t offset,
             struct fuse_file_info *fi)
 {
-    struct fuse_context *ctx;
     int perm;
 
     if ( strcmp(path, ramfs_file_path) != 0 ) {
@@ -183,9 +178,6 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
         return 0;
     }
 
-    /* Get the context */
-    ctx = fuse_get_context();
-
     if ( offset + size > ramfs_file_max_size ) {
         return -EDQUOT;
     }
@@ -197,6 +189,22 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
     return size;
 }
 
+int
+advfs_truncate(const char *path, off_t size)
+{
+    if ( strcmp(path, ramfs_file_path) != 0 ) {
+        return -ENOENT;
+    }
+
+    while ( (off_t)ramfs_file_size < size ) {
+        ramfs_file_buf[ramfs_file_size] = 0;
+        ramfs_file_size++;
+    }
+    ramfs_file_size = size;
+
+    return 0;
+}
+
 static struct fuse_operations advfs_oper = {
     .getattr    = advfs_getattr,
     .readdir    = advfs_readdir,
@@ -204,6 +212,7 @@ static struct fuse_operations advfs_oper = {
     .open       = advfs_open,
     .read       = advfs_read,
     .write      = advfs_write,
+    .truncate   = advfs_truncate,
 };
 
 /*
@@ -212,7 +221,7 @@ static struct fuse_operations advfs_oper = {
 int
 main(int argc, char *argv[])
 {
-    ramfs_file_buf = malloc(ramfs_file_size);
+    ramfs_file_buf = malloc(ramfs_file_max_size);
     if ( NULL == ramfs_file_buf ) {
         return -1;
     }
