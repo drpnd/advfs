@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <stdint.h>
+#include <sys/time.h>
 
 #define ADVFS_NAME_MAX          256
 #define ADVFS_NUM_ENTRIES       100
@@ -88,12 +89,9 @@ typedef struct {
     advfs_entry_t *entries;
 } advfs_t;
 
-static const char *ramfs_file_path = "/test";
-static uint8_t *ramfs_file_buf = NULL;
-static size_t ramfs_file_size = 0;
-static size_t ramfs_file_max_size = 1 * 1024 * 1024;
-static time_t ramfs_file_timestamp = 1575370225;
-
+/*
+ * Resolve the entry corresponding to the path name
+ */
 advfs_entry_t *
 advfs_path2ent(advfs_t *advfs, const char *path)
 {
@@ -106,15 +104,23 @@ advfs_path2ent(advfs_t *advfs, const char *path)
 
     /* Root */
     e = &advfs->entries[advfs->root];
+    if ( '\0' == *path ) {
+        return e;
+    }
 
-    return e;
+    return NULL;
 }
 
 
+/*
+ * getattr
+ */
 int
 advfs_getattr(const char *path, struct stat *stbuf)
 {
     struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
     int status;
 
     /* Reset the stat structure */
@@ -122,29 +128,26 @@ advfs_getattr(const char *path, struct stat *stbuf)
 
     /* Get the context */
     ctx = fuse_get_context();
+    advfs = ctx->private_data;
 
-    if ( strcmp(path, "/") == 0 ) {
-        stbuf->st_mode = S_IFDIR | 0777;
-        stbuf->st_nlink = 2;
+    e = advfs_path2ent(advfs, path);
+    if ( NULL == e ) {
+        /* No entry found */
+        return -ENOENT;
+    }
+    if ( e->type == ADVFS_DIR ) {
+        /* Directory */
+        stbuf->st_mode = S_IFDIR | e->mode;
+        stbuf->st_nlink = 2 + e->u.dir.nent;
         stbuf->st_uid = ctx->uid;
         stbuf->st_gid = ctx->gid;
         status = 0;
-    } else if ( strcmp(path, ramfs_file_path) == 0 ) {
-        stbuf->st_mode = S_IFREG | 0666;
-        stbuf->st_nlink = 1;
-        stbuf->st_atime = (time_t)ramfs_file_timestamp;
-        stbuf->st_mtime = (time_t)ramfs_file_timestamp;
-        stbuf->st_ctime = (time_t)ramfs_file_timestamp;
+        stbuf->st_atime = e->atime;
+        stbuf->st_mtime = e->mtime;
+        stbuf->st_ctime = e->ctime;
 #ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
-        stbuf->st_birthtime = (time_t)ramfs_file_timestamp;
+        stbuf->st_birthtime = e->ctime;
 #endif
-        stbuf->st_uid = ctx->uid;
-        stbuf->st_gid = ctx->gid;
-        stbuf->st_rdev = 0;
-        stbuf->st_size = ramfs_file_size;
-        stbuf->st_blksize = 4096;
-        stbuf->st_blocks = (ramfs_file_size + 4095) / 4096;
-        status = 0;
     } else {
         status = -ENOENT;
     }
@@ -152,20 +155,36 @@ advfs_getattr(const char *path, struct stat *stbuf)
     return status;
 }
 
+/*
+ * readdir
+ */
 int
 advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
               off_t offset, struct fuse_file_info *fi)
 {
-    if ( strcmp(path, "/") == 0 ) {
-        filler(buf, ".", NULL, 0);
-        filler(buf, "..", NULL, 0);
-        filler(buf, ramfs_file_path + 1, NULL, 0);
-        return 0;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path);
+    if ( NULL == e || e->type != ADVFS_DIR ) {
+        /* No entry found or non-directory entry */
+        return -ENOENT;
     }
 
-    return -ENOENT;
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
+
+    return 0;
 }
 
+/*
+ * statfs
+ */
 int
 advfs_statfs(const char *path, struct statvfs *buf)
 {
@@ -173,7 +192,7 @@ advfs_statfs(const char *path, struct statvfs *buf)
 
     memset(buf, 0, sizeof(struct statvfs));
 
-    used = (ramfs_file_size + 4096 - 1) / 4096;
+    used = 0;
 
     buf->f_bsize = 4096;
     buf->f_frsize = 4096;
@@ -192,87 +211,42 @@ advfs_statfs(const char *path, struct statvfs *buf)
     return 0;
 }
 
+/*
+ * open
+ */
 int
 advfs_open(const char *path, struct fuse_file_info *fi)
 {
-    if ( strcmp(path, ramfs_file_path) != 0 ) {
-        return -ENOENT;
-    }
-
-    return 0;
+    return -ENOENT;
 }
 
+/*
+ * read
+ */
 int
 advfs_read(const char *path, char *buf, size_t size, off_t offset,
            struct fuse_file_info *fi)
 {
-    int perm;
-
-    if ( strcmp(path, ramfs_file_path) != 0 ) {
-        return -ENOENT;
-    }
-    /* Permission check */
-    perm = fi->flags & 3;
-    if ( perm != O_RDONLY && perm != O_RDWR ) {
-        return -EACCES;
-    }
-
-    if ( offset < (off_t)ramfs_file_size ) {
-        if ( offset + size > ramfs_file_size ) {
-            size = ramfs_file_size - offset;
-        }
-        (void)memcpy(buf, ramfs_file_buf + offset, size);
-    } else {
-        size = 0;
-    }
-
-    return size;
+    return -ENOENT;
 }
 
+/*
+ * write
+ */
 int
 advfs_write(const char *path, const char *buf, size_t size, off_t offset,
             struct fuse_file_info *fi)
 {
-    int perm;
-
-    if ( strcmp(path, ramfs_file_path) != 0 ) {
-        return -ENOENT;
-    }
-
-    /* Permission check */
-    perm = fi->flags & 3;
-    if ( perm != O_WRONLY && perm != O_RDWR ) {
-        return -EACCES;
-    }
-    if ( size <= 0 ) {
-        return 0;
-    }
-
-    if ( offset + size > ramfs_file_max_size ) {
-        return -EDQUOT;
-    }
-    (void)memcpy(ramfs_file_buf + offset, buf, size);
-    if ( ramfs_file_size < offset + size ) {
-        ramfs_file_size = offset + size;
-    }
-
-    return size;
+    return -ENOENT;
 }
 
+/*
+ * truncate
+ */
 int
 advfs_truncate(const char *path, off_t size)
 {
-    if ( strcmp(path, ramfs_file_path) != 0 ) {
-        return -ENOENT;
-    }
-
-    while ( (off_t)ramfs_file_size < size ) {
-        ramfs_file_buf[ramfs_file_size] = 0;
-        ramfs_file_size++;
-    }
-    ramfs_file_size = size;
-
-    return 0;
+    return -ENOENT;
 }
 
 static struct fuse_operations advfs_oper = {
@@ -293,6 +267,7 @@ main(int argc, char *argv[])
 {
     advfs_t advfs;
     int i;
+    struct timeval tv;
 
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
@@ -304,20 +279,16 @@ main(int argc, char *argv[])
     }
 
     /* root directory */
+    gettimeofday(&tv, NULL);
     advfs.root = 0;
     advfs.entries[advfs.root].type = ADVFS_DIR;
     advfs.entries[advfs.root].name[0] = '\0';
     advfs.entries[advfs.root].mode = 0777;
-    advfs.entries[advfs.root].atime = 0;
-    advfs.entries[advfs.root].mtime = 0;
-    advfs.entries[advfs.root].ctime = 0;
+    advfs.entries[advfs.root].atime = tv.tv_sec;
+    advfs.entries[advfs.root].mtime = tv.tv_sec;
+    advfs.entries[advfs.root].ctime = tv.tv_sec;
     advfs.entries[advfs.root].u.dir.nent = 0;
     advfs.entries[advfs.root].u.dir.entries = NULL;
-
-    ramfs_file_buf = malloc(ramfs_file_max_size);
-    if ( NULL == ramfs_file_buf ) {
-        return -1;
-    }
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
