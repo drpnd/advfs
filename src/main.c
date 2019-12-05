@@ -34,11 +34,82 @@
 #include <sys/mman.h>
 #include <stdint.h>
 
+#define ADVFS_NAME_MAX          256
+#define ADVFS_NUM_ENTRIES       100
+
+/*
+ * type
+ */
+typedef enum {
+    ADVFS_UNUSED,
+    ADVFS_REGULAR_FILE,
+    ADVFS_DIR,
+} advfs_entry_type_t;
+
+typedef struct _advfs_entry advfs_entry_t;
+
+/*
+ * Regular file
+ */
+typedef struct {
+    uint8_t *buf;
+    size_t size;
+} advfs_entry_file_t;
+
+/*
+ * Directory
+ */
+typedef struct {
+    int nent;
+    advfs_entry_t **entries;
+} advfs_entry_dir_t;
+
+/*
+ * entry
+ */
+struct _advfs_entry {
+    char name[ADVFS_NAME_MAX];
+    advfs_entry_type_t type;
+    int mode;
+    time_t atime;
+    time_t mtime;
+    time_t ctime;
+    union {
+        advfs_entry_file_t file;
+        advfs_entry_dir_t dir;
+    } u;
+};
+
+/*
+ * advfs data structure
+ */
+typedef struct {
+    int root;
+    advfs_entry_t *entries;
+} advfs_t;
+
 static const char *ramfs_file_path = "/test";
 static uint8_t *ramfs_file_buf = NULL;
 static size_t ramfs_file_size = 0;
 static size_t ramfs_file_max_size = 1 * 1024 * 1024;
 static time_t ramfs_file_timestamp = 1575370225;
+
+advfs_entry_t *
+advfs_path2ent(advfs_t *advfs, const char *path)
+{
+    advfs_entry_t *e;
+
+    if ( '/' != *path ) {
+        return NULL;
+    }
+    path++;
+
+    /* Root */
+    e = &advfs->entries[advfs->root];
+
+    return e;
+}
+
 
 int
 advfs_getattr(const char *path, struct stat *stbuf)
@@ -61,7 +132,6 @@ advfs_getattr(const char *path, struct stat *stbuf)
     } else if ( strcmp(path, ramfs_file_path) == 0 ) {
         stbuf->st_mode = S_IFREG | 0666;
         stbuf->st_nlink = 1;
-        stbuf->st_size = strlen(ramfs_file_path);
         stbuf->st_atime = (time_t)ramfs_file_timestamp;
         stbuf->st_mtime = (time_t)ramfs_file_timestamp;
         stbuf->st_ctime = (time_t)ramfs_file_timestamp;
@@ -221,12 +291,35 @@ static struct fuse_operations advfs_oper = {
 int
 main(int argc, char *argv[])
 {
+    advfs_t advfs;
+    int i;
+
+    /* Allocate entries */
+    advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
+    if ( NULL == advfs.entries ) {
+        return -1;
+    }
+    for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
+        advfs.entries[i].type = ADVFS_UNUSED;
+    }
+
+    /* root directory */
+    advfs.root = 0;
+    advfs.entries[advfs.root].type = ADVFS_DIR;
+    advfs.entries[advfs.root].name[0] = '\0';
+    advfs.entries[advfs.root].mode = 0777;
+    advfs.entries[advfs.root].atime = 0;
+    advfs.entries[advfs.root].mtime = 0;
+    advfs.entries[advfs.root].ctime = 0;
+    advfs.entries[advfs.root].u.dir.nent = 0;
+    advfs.entries[advfs.root].u.dir.entries = NULL;
+
     ramfs_file_buf = malloc(ramfs_file_max_size);
     if ( NULL == ramfs_file_buf ) {
         return -1;
     }
 
-    return fuse_main(argc, argv, &advfs_oper, NULL);
+    return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
 
 /*
