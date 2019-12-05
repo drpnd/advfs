@@ -62,7 +62,7 @@ typedef struct {
  */
 typedef struct {
     int nent;
-    advfs_entry_t **entries;
+    int *children;
 } advfs_entry_dir_t;
 
 /*
@@ -288,7 +288,7 @@ main(int argc, char *argv[])
     advfs.entries[advfs.root].mtime = tv.tv_sec;
     advfs.entries[advfs.root].ctime = tv.tv_sec;
     advfs.entries[advfs.root].u.dir.nent = 0;
-    advfs.entries[advfs.root].u.dir.entries = NULL;
+    advfs.entries[advfs.root].u.dir.children = NULL;
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
