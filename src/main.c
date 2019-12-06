@@ -35,7 +35,7 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-#define ADVFS_NAME_MAX          256
+#define ADVFS_NAME_MAX          255
 #define ADVFS_NUM_ENTRIES       100
 
 /*
@@ -69,7 +69,7 @@ typedef struct {
  * entry
  */
 struct _advfs_entry {
-    char name[ADVFS_NAME_MAX];
+    char name[ADVFS_NAME_MAX + 1];
     advfs_entry_type_t type;
     int mode;
     time_t atime;
@@ -89,26 +89,76 @@ typedef struct {
     advfs_entry_t *entries;
 } advfs_t;
 
+/* Prototype declarations */
+static advfs_entry_t * _path2ent_rec(advfs_t *, advfs_entry_t *, const char *);
+
+
 /*
  * Resolve the entry corresponding to the path name
  */
+static advfs_entry_t *
+_path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
+{
+    advfs_entry_t *e;
+    char name[ADVFS_NAME_MAX + 1];
+    char *s;
+    size_t len;
+    int i;
+
+    if ( cur->type != ADVFS_DIR ) {
+        return NULL;
+    }
+
+    /* Remove the head '/'s */
+    if ( '/' != *path ) {
+        return NULL;
+    }
+    while ( '/' == *path ) {
+        path++;
+    }
+
+    /* Get the file/directory entry name */
+    s = index(path, '/');
+    if ( NULL == s ) {
+        len = strlen(path);
+    } else {
+        len = s - path;
+    }
+    if ( len > ADVFS_NAME_MAX ) {
+        /* Invalid path name */
+        return NULL;
+    } else if ( len == 0 ) {
+        return cur;
+    }
+    memcpy(name, path, len);
+    name[len] = '\0';
+    path += len;
+
+    /* Resolve the entry */
+    for ( i = 0; i < cur->u.dir.nent; i++ ) {
+        e = &advfs->entries[cur->u.dir.children[i]];
+        if ( 0 == strcmp(name, e->name) ) {
+            /* Found */
+            if ( e->type == ADVFS_DIR ) {
+                return _path2ent_rec(advfs, e, path);
+            } else if ( '\0' == *path ) {
+                return e;
+            } else {
+                /* Invalid file type */
+                return NULL;
+            }
+        }
+    }
+
+    return NULL;
+}
 advfs_entry_t *
 advfs_path2ent(advfs_t *advfs, const char *path)
 {
     advfs_entry_t *e;
 
-    if ( '/' != *path ) {
-        return NULL;
-    }
-    path++;
-
-    /* Root */
     e = &advfs->entries[advfs->root];
-    if ( '\0' == *path ) {
-        return e;
-    }
-
-    return NULL;
+    return _path2ent_rec(advfs, e, path);
 }
 
 /*
