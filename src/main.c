@@ -385,6 +385,12 @@ advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
     gettimeofday(&tv, NULL);
 
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL != e ) {
+        /* Already exists */
+        return -EEXIST;
+    }
+
     e = advfs_path2ent(advfs, path, 1);
     if ( NULL == e ) {
         /* No entry found or non-directory entry */
