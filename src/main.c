@@ -248,11 +248,25 @@ advfs_truncate(const char *path, off_t size)
     return -ENOENT;
 }
 
+/*
+ * create
+ */
 int
 advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     return -EACCES;
 }
+
+/*
+ * mkdir
+ */
+int
+advfs_mkdir(const char *path, mode_t mode)
+{
+    return -EACCES;
+}
+
+
 static struct fuse_operations advfs_oper = {
     .getattr    = advfs_getattr,
     .readdir    = advfs_readdir,
@@ -262,6 +276,7 @@ static struct fuse_operations advfs_oper = {
     .write      = advfs_write,
     .truncate   = advfs_truncate,
     .create     = advfs_create,
+    .mkdir      = advfs_mkdir,
 };
 
 /*
