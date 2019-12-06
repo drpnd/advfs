@@ -37,6 +37,7 @@
 
 #define ADVFS_NAME_MAX          255
 #define ADVFS_NUM_ENTRIES       100
+#define ADVFS_MAX_CHILDREN      128
 
 /*
  * type
@@ -62,7 +63,7 @@ typedef struct {
  */
 typedef struct {
     int nent;
-    int *children;
+    int children[ADVFS_MAX_CHILDREN];
 } advfs_entry_dir_t;
 
 /*
@@ -90,14 +91,14 @@ typedef struct {
 } advfs_t;
 
 /* Prototype declarations */
-static advfs_entry_t * _path2ent_rec(advfs_t *, advfs_entry_t *, const char *);
-
+static advfs_entry_t *
+_path2ent_rec(advfs_t *, advfs_entry_t *, const char *, int);
 
 /*
  * Resolve the entry corresponding to the path name
  */
 static advfs_entry_t *
-_path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
+_path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path, int create)
 {
     advfs_entry_t *e;
     char name[ADVFS_NAME_MAX + 1];
@@ -140,7 +141,7 @@ _path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
             if ( e->type == ADVFS_DIR ) {
-                return _path2ent_rec(advfs, e, path);
+                return _path2ent_rec(advfs, e, path, create);
             } else if ( '\0' == *path ) {
                 return e;
             } else {
@@ -150,15 +151,39 @@ _path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
         }
     }
 
+    /* Not found */
+    if ( '\0' == *path && create ) {
+        /* Create */
+        if ( cur->u.dir.nent >= ADVFS_MAX_CHILDREN ) {
+            return NULL;
+        }
+        /* Search unused inode */
+        for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
+            if ( advfs->entries[i].type == ADVFS_UNUSED ) {
+                break;
+            }
+        }
+        if ( i >= ADVFS_NUM_ENTRIES ) {
+            /* Not found */
+            return NULL;
+        }
+        cur->u.dir.children[cur->u.dir.nent] = i;
+        e = &advfs->entries[i];
+        memset(e, 0, sizeof(advfs_entry_t));
+        memcpy(e->name, name, len + 1);
+        cur->u.dir.nent++;
+        return e;
+    }
+
     return NULL;
 }
 advfs_entry_t *
-advfs_path2ent(advfs_t *advfs, const char *path)
+advfs_path2ent(advfs_t *advfs, const char *path, int create)
 {
     advfs_entry_t *e;
 
     e = &advfs->entries[advfs->root];
-    return _path2ent_rec(advfs, e, path);
+    return _path2ent_rec(advfs, e, path, create);
 }
 
 /*
@@ -179,7 +204,7 @@ advfs_getattr(const char *path, struct stat *stbuf)
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path);
+    e = advfs_path2ent(advfs, path, 0);
     if ( NULL == e ) {
         /* No entry found */
         return -ENOENT;
@@ -188,6 +213,18 @@ advfs_getattr(const char *path, struct stat *stbuf)
         /* Directory */
         stbuf->st_mode = S_IFDIR | e->mode;
         stbuf->st_nlink = 2 + e->u.dir.nent;
+        stbuf->st_uid = ctx->uid;
+        stbuf->st_gid = ctx->gid;
+        status = 0;
+        stbuf->st_atime = e->atime;
+        stbuf->st_mtime = e->mtime;
+        stbuf->st_ctime = e->ctime;
+#ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
+        stbuf->st_birthtime = e->ctime;
+#endif
+    } else if ( e->type == ADVFS_REGULAR_FILE ) {
+        stbuf->st_mode = S_IFREG | e->mode;
+        stbuf->st_nlink = 1;
         stbuf->st_uid = ctx->uid;
         stbuf->st_gid = ctx->gid;
         status = 0;
@@ -214,12 +251,14 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     struct fuse_context *ctx;
     advfs_t *advfs;
     advfs_entry_t *e;
+    advfs_entry_t *e2;
+    int i;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path);
+    e = advfs_path2ent(advfs, path, 0);
     if ( NULL == e || e->type != ADVFS_DIR ) {
         /* No entry found or non-directory entry */
         return -ENOENT;
@@ -227,6 +266,10 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
+    for ( i = 0; i < e->u.dir.nent; i++ ) {
+        e2 = &advfs->entries[e->u.dir.children[i]];
+        filler(buf, e2->name, NULL, 0);
+    }
 
     return 0;
 }
@@ -304,7 +347,29 @@ advfs_truncate(const char *path, off_t size)
 int
 advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-    return -EACCES;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+    struct timeval tv;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    gettimeofday(&tv, NULL);
+
+    e = advfs_path2ent(advfs, path, 1);
+    if ( NULL == e ) {
+        /* No entry found or non-directory entry */
+        return -EACCES;
+    }
+    e->type = ADVFS_REGULAR_FILE;
+    e->mode = mode;
+    e->atime = tv.tv_sec;
+    e->mtime = tv.tv_sec;
+    e->ctime = tv.tv_sec;
+
+    return 0;
 }
 
 /*
@@ -358,7 +423,6 @@ main(int argc, char *argv[])
     advfs.entries[advfs.root].mtime = tv.tv_sec;
     advfs.entries[advfs.root].ctime = tv.tv_sec;
     advfs.entries[advfs.root].u.dir.nent = 0;
-    advfs.entries[advfs.root].u.dir.children = NULL;
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
