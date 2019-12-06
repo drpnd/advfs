@@ -342,6 +342,33 @@ advfs_truncate(const char *path, off_t size)
 }
 
 /*
+ * utimens
+ */
+int
+advfs_utimens(const char *path, const struct timespec tv[2])
+{
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        /* No entry found or non-directory entry */
+        return -ENOENT;
+    }
+    if ( NULL != tv ) {
+        e->atime = tv[0].tv_sec;
+        e->mtime = tv[1].tv_sec;
+    }
+
+    return 0;
+}
+
+/*
  * create
  */
 int
@@ -392,6 +419,7 @@ static struct fuse_operations advfs_oper = {
     .truncate   = advfs_truncate,
     .create     = advfs_create,
     .mkdir      = advfs_mkdir,
+    .utimens    = advfs_utimens,
 };
 
 /*
