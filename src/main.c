@@ -446,11 +446,16 @@ advfs_truncate(const char *path, off_t size)
     }
 
     if ( (off_t)e->u.file.size != size ) {
-        nbuf = realloc(e->u.file.buf, size);
-        if ( NULL == nbuf ) {
-            return -EFBIG;
+        if ( size > 0 ) {
+            nbuf = realloc(e->u.file.buf, size);
+            if ( NULL == nbuf ) {
+                return -EFBIG;
+            }
+            e->u.file.buf = nbuf;
+        } else {
+            free(e->u.file.buf);
+            e->u.file.buf = NULL;
         }
-        e->u.file.buf = nbuf;
     }
 
     while ( (off_t)e->u.file.size < size ) {
