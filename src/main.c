@@ -234,6 +234,10 @@ advfs_getattr(const char *path, struct stat *stbuf)
 #ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
         stbuf->st_birthtime = e->ctime;
 #endif
+        stbuf->st_rdev = 0;
+        stbuf->st_size = e->u.file.size;
+        stbuf->st_blksize = 4096;
+        stbuf->st_blocks = (e->u.file.size + 4095) / 4096;
     } else {
         status = -ENOENT;
     }
@@ -309,7 +313,20 @@ advfs_statfs(const char *path, struct statvfs *buf)
 int
 advfs_open(const char *path, struct fuse_file_info *fi)
 {
-    return -ENOENT;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOENT;
+    }
+
+    return 0;
 }
 
 /*
@@ -319,7 +336,39 @@ int
 advfs_read(const char *path, char *buf, size_t size, off_t offset,
            struct fuse_file_info *fi)
 {
-    return -ENOENT;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+    int perm;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOENT;
+    }
+    if ( e->type != ADVFS_REGULAR_FILE ) {
+        return -EISDIR;
+    }
+
+    /* Mode check */
+    perm = fi->flags & 3;
+    if ( perm != O_RDONLY && perm != O_RDWR ) {
+        return -EACCES;
+    }
+
+    if ( offset < (off_t)e->u.file.size ) {
+        if ( offset + size > e->u.file.size ) {
+            size = e->u.file.size - offset;
+        }
+        (void)memcpy(buf, e->u.file.buf + offset, size);
+    } else {
+        size = 0;
+    }
+
+    return size;
 }
 
 /*
@@ -329,7 +378,48 @@ int
 advfs_write(const char *path, const char *buf, size_t size, off_t offset,
             struct fuse_file_info *fi)
 {
-    return -ENOENT;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+    int perm;
+    size_t nsize;
+    uint8_t *nbuf;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOENT;
+    }
+    if ( e->type != ADVFS_REGULAR_FILE ) {
+        return -EISDIR;
+    }
+
+    /* Mode check */
+    perm = fi->flags & 3;
+    if ( perm != O_WRONLY && perm != O_RDWR ) {
+        return -EACCES;
+    }
+    if ( size <= 0 ) {
+        return 0;
+    }
+
+    nsize = offset + size;
+    if ( nsize > e->u.file.size ) {
+        /* Reallocate */
+        nbuf = realloc(e->u.file.buf, nsize);
+        if ( NULL == nbuf ) {
+            return -EDQUOT;
+        }
+        e->u.file.buf = nbuf;
+        e->u.file.size = nsize;
+    }
+
+    (void)memcpy(e->u.file.buf + offset, buf, size);
+
+    return size;
 }
 
 /*
@@ -338,7 +428,38 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
 int
 advfs_truncate(const char *path, off_t size)
 {
-    return -ENOENT;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+    uint8_t *nbuf;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOENT;
+    }
+    if ( e->type != ADVFS_REGULAR_FILE ) {
+        return -EISDIR;
+    }
+
+    if ( (off_t)e->u.file.size != size ) {
+        nbuf = realloc(e->u.file.buf, size);
+        if ( NULL == nbuf ) {
+            return -EFBIG;
+        }
+        e->u.file.buf = nbuf;
+    }
+
+    while ( (off_t)e->u.file.size < size ) {
+        e->u.file.buf[e->u.file.size] = 0;
+        e->u.file.size++;
+    }
+    e->u.file.size = size;
+
+    return 0;
 }
 
 /*
