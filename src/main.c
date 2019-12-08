@@ -650,9 +650,32 @@ advfs_mkdir(const char *path, mode_t mode)
     e->mtime = tv.tv_sec;
     e->ctime = tv.tv_sec;
 
-    printf("%d %p %s\n", e->type, advfs_path2ent(advfs, path, 0), path);
-
     return 0;
+}
+
+/*
+ * rmdir
+ */
+int
+advfs_rmdir(const char *path)
+{
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOENT;
+    }
+    if ( e->type != ADVFS_DIR ) {
+        return -ENOTDIR;
+    }
+
+    return advfs_remove_ent(advfs, path);
 }
 
 /*
@@ -663,10 +686,19 @@ advfs_unlink(const char *path)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
+    advfs_entry_t *e;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL == e ) {
+        return -ENOTDIR;
+    }
+    if ( e->type != ADVFS_REGULAR_FILE ) {
+        return -ENOENT;
+    }
 
     return advfs_remove_ent(advfs, path);
 }
@@ -681,6 +713,7 @@ static struct fuse_operations advfs_oper = {
     .truncate   = advfs_truncate,
     .create     = advfs_create,
     .mkdir      = advfs_mkdir,
+    .rmdir      = advfs_rmdir,
     .utimens    = advfs_utimens,
     .unlink     = advfs_unlink,
 };
