@@ -694,7 +694,7 @@ advfs_unlink(const char *path)
 
     e = advfs_path2ent(advfs, path, 0);
     if ( NULL == e ) {
-        return -ENOTDIR;
+        return -ENOENT;
     }
     if ( e->type != ADVFS_REGULAR_FILE ) {
         return -ENOENT;
