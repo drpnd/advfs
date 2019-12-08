@@ -630,7 +630,6 @@ advfs_unlink(const char *path)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    int ret;
 
     /* Get the context */
     ctx = fuse_get_context();
