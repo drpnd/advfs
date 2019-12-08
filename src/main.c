@@ -187,6 +187,88 @@ advfs_path2ent(advfs_t *advfs, const char *path, int create)
 }
 
 /*
+ * Remove an entry
+ */
+int
+_remove_ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
+{
+    advfs_entry_t *e;
+    char name[ADVFS_NAME_MAX + 1];
+    char *s;
+    size_t len;
+    int i;
+
+    if ( cur->type != ADVFS_DIR ) {
+        return -ENOENT;
+    }
+
+    /* Remove the head '/'s */
+    if ( '/' != *path ) {
+        return -ENOENT;
+    }
+    while ( '/' == *path ) {
+        path++;
+    }
+
+    /* Get the file/directory entry name */
+    s = index(path, '/');
+    if ( NULL == s ) {
+        len = strlen(path);
+    } else {
+        len = s - path;
+    }
+    if ( len > ADVFS_NAME_MAX ) {
+        /* Invalid path name */
+        return -ENOENT;
+    } else if ( len == 0 ) {
+        return -ENOENT;
+    }
+    memcpy(name, path, len);
+    name[len] = '\0';
+    path += len;
+
+    /* Resolve the entry */
+    for ( i = 0; i < cur->u.dir.nent; i++ ) {
+        e = &advfs->entries[cur->u.dir.children[i]];
+        if ( 0 == strcmp(name, e->name) ) {
+            /* Found */
+            if ( e->type == ADVFS_DIR ) {
+                return _remove_ent_rec(advfs, e, path);
+            } else if ( '\0' == *path ) {
+                break;
+            } else {
+                /* Invalid file type */
+                return -ENOENT;
+            }
+        }
+    }
+    if ( i == cur->u.dir.nent ) {
+        return -ENOENT;
+    }
+
+    /* Free the entry */
+    e = &advfs->entries[cur->u.dir.children[i]];
+    e->type = ADVFS_UNUSED;
+
+    /* Shift the child entries */
+    cur->u.dir.nent--;
+    for ( ; i < cur->u.dir.nent; i++ ) {
+        cur->u.dir.children[i] = cur->u.dir.children[i + 1];
+    }
+
+    return 0;
+}
+int
+advfs_remove_ent(advfs_t *advfs, const char *path)
+{
+    advfs_entry_t *root;
+
+    root = &advfs->entries[advfs->root];
+    return _remove_ent_rec(advfs, root, path);
+}
+
+
+/*
  * getattr
  */
 int
@@ -540,6 +622,22 @@ advfs_mkdir(const char *path, mode_t mode)
     return -EACCES;
 }
 
+/*
+ * unlink
+ */
+int
+advfs_unlink(const char *path)
+{
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    int ret;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    return advfs_remove_ent(advfs, path);
+}
 
 static struct fuse_operations advfs_oper = {
     .getattr    = advfs_getattr,
@@ -552,6 +650,7 @@ static struct fuse_operations advfs_oper = {
     .create     = advfs_create,
     .mkdir      = advfs_mkdir,
     .utimens    = advfs_utimens,
+    .unlink     = advfs_unlink,
 };
 
 /*
