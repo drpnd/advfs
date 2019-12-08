@@ -140,10 +140,10 @@ _path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path, int create)
         e = &advfs->entries[cur->u.dir.children[i]];
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
-            if ( e->type == ADVFS_DIR ) {
-                return _path2ent_rec(advfs, e, path, create);
-            } else if ( '\0' == *path ) {
+            if ( '\0' == *path ) {
                 return e;
+            } else if ( e->type == ADVFS_DIR ) {
+                return _path2ent_rec(advfs, e, path, create);
             } else {
                 /* Invalid file type */
                 return NULL;
@@ -232,10 +232,10 @@ _remove_ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
         e = &advfs->entries[cur->u.dir.children[i]];
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
-            if ( e->type == ADVFS_DIR ) {
-                return _remove_ent_rec(advfs, e, path);
-            } else if ( '\0' == *path ) {
+            if ( '\0' == *path ) {
                 break;
+            } else if ( e->type == ADVFS_DIR ) {
+                return _remove_ent_rec(advfs, e, path);
             } else {
                 /* Invalid file type */
                 return -ENOENT;
@@ -248,6 +248,9 @@ _remove_ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
 
     /* Free the entry */
     e = &advfs->entries[cur->u.dir.children[i]];
+    if ( e->type == ADVFS_DIR && e->u.dir.nent > 0 ) {
+        return -ENOTEMPTY;
+    }
     e->type = ADVFS_UNUSED;
 
     /* Shift the child entries */
@@ -619,7 +622,37 @@ advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 int
 advfs_mkdir(const char *path, mode_t mode)
 {
-    return -EACCES;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_entry_t *e;
+    struct timeval tv;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+
+    gettimeofday(&tv, NULL);
+
+    e = advfs_path2ent(advfs, path, 0);
+    if ( NULL != e ) {
+        /* Already exists */
+        return -EEXIST;
+    }
+
+    e = advfs_path2ent(advfs, path, 1);
+    if ( NULL == e ) {
+        /* No entry found or non-directory entry */
+        return -EACCES;
+    }
+    e->type = ADVFS_DIR;
+    e->mode = mode;
+    e->atime = tv.tv_sec;
+    e->mtime = tv.tv_sec;
+    e->ctime = tv.tv_sec;
+
+    printf("%d %p %s\n", e->type, advfs_path2ent(advfs, path, 0), path);
+
+    return 0;
 }
 
 /*
