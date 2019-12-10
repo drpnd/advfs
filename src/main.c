@@ -34,10 +34,14 @@
 #include <sys/mman.h>
 #include <stdint.h>
 #include <sys/time.h>
+#include <assert.h>
 
 #define ADVFS_NAME_MAX          255
 #define ADVFS_NUM_ENTRIES       100
 #define ADVFS_MAX_CHILDREN      128
+#define ADVFS_BLOCK_SIZE        4096
+#define ADVFS_BLOCK_NUM         10240
+#define ADVFS_INODE_NUM         128
 
 /*
  * type
@@ -93,6 +97,7 @@ typedef struct {
  * inode attribute
  */
 typedef struct {
+    uint64_t type;
     uint64_t mode;
     uint64_t atime;
     uint64_t mtime;
@@ -105,10 +110,10 @@ typedef struct {
  * inode
  */
 typedef struct {
-    /* Name: 256 bytes */
-    char name[ADVFS_NAME_MAX + 1];
     /* Attributes: 128 bytes */
     advfs_inode_attr_t attr;
+    /* Name: 256 bytes */
+    char name[ADVFS_NAME_MAX + 1];
     /* Blocks 128 bytes */
     uint64_t blocks[16];
 } __attribute__ ((packed, aligned(512))) advfs_inode_t;
@@ -117,15 +122,18 @@ typedef struct {
  * advfs superblock
  */
 typedef struct {
-    /* Root inode */
-    uint64_t root;
+    uint64_t ptr_inode;
+    uint64_t ptr_block;
     /* # of inodes */
     uint64_t n_inodes;
+    uint64_t n_inode_used;
     /* # of blocks */
     uint64_t n_blocks;
-    /* Free list */
-    advfs_free_list_t *freelist;
-} __attribute__ ((packed, aligned(4096))) advfs_superblock_t;
+    uint64_t n_block_used;
+    uint64_t freelist;
+    /* Root inode */
+    advfs_inode_t root;
+} __attribute__ ((packed, aligned(ADVFS_BLOCK_SIZE))) advfs_superblock_t;
 
 /*
  * advfs data structure
@@ -133,6 +141,7 @@ typedef struct {
 typedef struct {
     int root;
     advfs_entry_t *entries;
+    advfs_superblock_t *superblock;
 } advfs_t;
 
 /* Prototype declarations */
@@ -366,8 +375,9 @@ advfs_getattr(const char *path, struct stat *stbuf)
 #endif
         stbuf->st_rdev = 0;
         stbuf->st_size = e->u.file.size;
-        stbuf->st_blksize = 4096;
-        stbuf->st_blocks = (e->u.file.size + 4095) / 4096;
+        stbuf->st_blksize = ADVFS_BLOCK_SIZE;
+        stbuf->st_blocks
+            = (e->u.file.size + ADVFS_BLOCK_SIZE - 1) / ADVFS_BLOCK_SIZE;
     } else {
         status = -ENOENT;
     }
@@ -414,25 +424,30 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 int
 advfs_statfs(const char *path, struct statvfs *buf)
 {
-    ssize_t used;
+    struct fuse_context *ctx;
+    advfs_t *advfs;
+    advfs_superblock_t *sblk;
+
+    /* Get the context */
+    ctx = fuse_get_context();
+    advfs = ctx->private_data;
+    sblk = advfs->superblock;
 
     memset(buf, 0, sizeof(struct statvfs));
 
-    used = 0;
+    buf->f_bsize = ADVFS_BLOCK_SIZE;
+    buf->f_frsize = ADVFS_BLOCK_SIZE;
+    buf->f_blocks = advfs->superblock->n_blocks;    /* in f_frsize unit */
+    buf->f_bfree = sblk->n_blocks - sblk->n_block_used;
+    buf->f_bavail = sblk->n_blocks - sblk->n_block_used;
 
-    buf->f_bsize = 4096;
-    buf->f_frsize = 4096;
-    buf->f_blocks = 1024;       /* in f_frsize unit */
-    buf->f_bfree = 1024 - used;
-    buf->f_bavail = 1024 - used;
-
-    buf->f_files = 1000;
-    buf->f_ffree = 100 - 1;
-    buf->f_favail = 100 - 1;
+    buf->f_files = sblk->n_inodes;
+    buf->f_ffree = sblk->n_inodes - sblk->n_inode_used;
+    buf->f_favail = sblk->n_inodes - sblk->n_inode_used;
 
     buf->f_fsid = 0;
     buf->f_flag = 0;
-    buf->f_namemax = 255;
+    buf->f_namemax = ADVFS_NAME_MAX;
 
     return 0;
 }
@@ -770,8 +785,50 @@ int
 main(int argc, char *argv[])
 {
     advfs_t advfs;
-    int i;
+    ssize_t i;
     struct timeval tv;
+    void *blkdev;
+    advfs_superblock_t *sblk;
+    advfs_inode_t *inode;
+    void *block;
+    int ratio;
+    int nblk;
+    advfs_free_list_t *fl;
+
+    /* Initialize the block device */
+    blkdev = malloc(ADVFS_BLOCK_SIZE * ADVFS_BLOCK_NUM);
+    if ( NULL == blkdev ) {
+        return -1;
+    }
+    sblk = blkdev;
+
+    /* Ensure that each data structure size must be aligned. */
+    assert( (sizeof(ADVFS_BLOCK_SIZE) % sizeof(advfs_inode_t)) != 0 );
+    ratio = sizeof(ADVFS_BLOCK_SIZE) / sizeof(advfs_inode_t);
+    assert( (ADVFS_INODE_NUM % ratio) != 0 );
+    nblk = (ADVFS_INODE_NUM / ratio);
+
+    sblk->ptr_inode = 1;
+    sblk->n_inodes = ADVFS_INODE_NUM;
+    sblk->n_inode_used = 0;
+    sblk->ptr_block = 1 + nblk;
+    sblk->n_blocks = ADVFS_BLOCK_NUM - (1 + nblk);
+    sblk->n_block_used = 0;
+
+    /* Initialize all inodes */
+    inode = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_inode;
+    for ( i = 0; i < (ssize_t)sblk->n_inodes; i++ ) {
+        inode[i].attr.type = ADVFS_UNUSED;
+    }
+
+    /* Initialize all blocks */
+    block = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_block;
+    fl = block;
+    for ( i = 0; i < (ssize_t)sblk->n_inodes - 1; i++ ) {
+        fl->next = sblk->ptr_block + i + 1;
+        fl = block + ADVFS_BLOCK_SIZE;
+    }
+    fl->next = 0;
 
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
