@@ -83,6 +83,51 @@ struct _advfs_entry {
 };
 
 /*
+ * free list
+ */
+typedef struct {
+    uint64_t next;
+} advfs_free_list_t;
+
+/*
+ * inode attribute
+ */
+typedef struct {
+    uint64_t mode;
+    uint64_t atime;
+    uint64_t mtime;
+    uint64_t ctime;
+    uint64_t size;
+    uint64_t n_blocks;
+} __attribute__ ((packed, aligned(128))) advfs_inode_attr_t;
+
+/*
+ * inode
+ */
+typedef struct {
+    /* Name: 256 bytes */
+    char name[ADVFS_NAME_MAX + 1];
+    /* Attributes: 128 bytes */
+    advfs_inode_attr_t attr;
+    /* Blocks 128 bytes */
+    uint64_t blocks[16];
+} __attribute__ ((packed, aligned(512))) advfs_inode_t;
+
+/*
+ * advfs superblock
+ */
+typedef struct {
+    /* Root inode */
+    uint64_t root;
+    /* # of inodes */
+    uint64_t n_inodes;
+    /* # of blocks */
+    uint64_t n_blocks;
+    /* Free list */
+    advfs_free_list_t *freelist;
+} __attribute__ ((packed, aligned(4096))) advfs_superblock_t;
+
+/*
  * advfs data structure
  */
 typedef struct {
