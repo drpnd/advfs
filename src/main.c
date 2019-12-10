@@ -829,6 +829,18 @@ main(int argc, char *argv[])
         fl = block + ADVFS_BLOCK_SIZE;
     }
     fl->next = 0;
+    sblk->freelist = sblk->ptr_block;
+
+    /* Initialize the root inode */
+    gettimeofday(&tv, NULL);
+    sblk->root.attr.type = ADVFS_DIR;
+    sblk->root.attr.mode = S_IFDIR | 0777;
+    sblk->root.attr.atime = tv.tv_sec;
+    sblk->root.attr.mtime = tv.tv_sec;
+    sblk->root.attr.ctime = tv.tv_sec;
+    sblk->root.attr.size = 0;
+    sblk->root.attr.n_blocks = 0;
+    sblk->root.name[0] = '\0';
 
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
