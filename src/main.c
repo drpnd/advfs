@@ -240,6 +240,138 @@ advfs_path2ent(advfs_t *advfs, const char *path, int create)
     return _path2ent_rec(advfs, e, path, create);
 }
 
+static advfs_inode_t *
+_path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
+                int create)
+{
+    advfs_inode_t *e;
+    advfs_inode_t *inodes;
+    char name[ADVFS_NAME_MAX + 1];
+    char *s;
+    size_t len;
+    ssize_t i;
+    uint64_t b;
+    uint64_t n;
+    uint64_t idx;
+    uint64_t *block;
+    advfs_free_list_t *fl;
+
+    if ( cur->attr.type != ADVFS_DIR ) {
+        return NULL;
+    }
+
+    /* Remove the head '/'s */
+    if ( '/' != *path ) {
+        return NULL;
+    }
+    while ( '/' == *path ) {
+        path++;
+    }
+
+    /* Get the file/directory entry name */
+    s = index(path, '/');
+    if ( NULL == s ) {
+        len = strlen(path);
+    } else {
+        len = s - path;
+    }
+    if ( len > ADVFS_NAME_MAX ) {
+        /* Invalid path name */
+        return NULL;
+    } else if ( len == 0 ) {
+        return cur;
+    }
+    memcpy(name, path, len);
+    name[len] = '\0';
+    path += len;
+
+    /* Resolve the entry */
+    for ( i = 0; i < (ssize_t)cur->attr.size; i++ ) {
+        n = i / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+        idx = i % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+        if ( n < 15 ) {
+            b = cur->blocks[n];
+            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+        } else {
+            b = cur->blocks[15];
+            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            while ( n < (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+                b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+                block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+                n -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+            }
+            b = block[n];
+            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+        }
+        /* inode */
+        idx = block[idx];
+        b = idx / (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
+        n = idx % (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
+        b += advfs->superblock->ptr_inode;
+        e = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+        e = &e[n];
+
+        if ( 0 == strcmp(name, e->name) ) {
+            /* Found */
+            if ( '\0' == *path ) {
+                return e;
+            } else if ( e->attr.type == ADVFS_DIR ) {
+                return _path2inode_rec(advfs, e, path, create);
+            } else {
+                /* Invalid file type */
+                return NULL;
+            }
+        }
+    }
+
+    /* Not found */
+    if ( '\0' == *path && create ) {
+        /* Create */
+        if ( cur->attr.size >= ADVFS_MAX_CHILDREN ) {
+            return NULL;
+        }
+        /* Search unused inode */
+        inodes = (void *)advfs->superblock
+            + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode;
+        for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
+            if ( inodes[i].attr.type == ADVFS_UNUSED ) {
+                break;
+            }
+        }
+        if ( i >= ADVFS_NUM_ENTRIES ) {
+            /* Not found */
+            return NULL;
+        }
+        if ( cur->attr.n_blocks == 0 ) {
+            /* Allocate a block */
+            b = advfs->superblock->freelist;
+            fl = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            advfs->superblock->freelist = fl->next;
+            cur->blocks[0] = b;
+            cur->attr.n_blocks = 1;
+        }
+        assert ( cur->attr.size < 512 );
+        b = cur->blocks[0];
+        block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;;
+        block[cur->attr.size] = i;
+        e = &inodes[i];
+        memset(e, 0, sizeof(advfs_inode_t));
+        memcpy(e->name, name, len + 1);
+        cur->attr.size++;
+        return e;
+    }
+
+    return NULL;
+}
+advfs_inode_t *
+advfs_path2inode(advfs_t *advfs, const char *path, int create)
+{
+    advfs_inode_t *e;
+
+    e = &advfs->superblock->root;
+    return _path2inode_rec(advfs, e, path, create);
+}
+
 /*
  * Remove an entry
  */
@@ -333,7 +465,7 @@ advfs_getattr(const char *path, struct stat *stbuf)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     int status;
 
     /* Reset the stat structure */
@@ -343,41 +475,40 @@ advfs_getattr(const char *path, struct stat *stbuf)
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         /* No entry found */
         return -ENOENT;
     }
-    if ( e->type == ADVFS_DIR ) {
+    if ( e->attr.type == ADVFS_DIR ) {
         /* Directory */
-        stbuf->st_mode = S_IFDIR | e->mode;
-        stbuf->st_nlink = 2 + e->u.dir.nent;
+        stbuf->st_mode = S_IFDIR | e->attr.mode;
+        stbuf->st_nlink = 2 + e->attr.size;
         stbuf->st_uid = ctx->uid;
         stbuf->st_gid = ctx->gid;
         status = 0;
-        stbuf->st_atime = e->atime;
-        stbuf->st_mtime = e->mtime;
-        stbuf->st_ctime = e->ctime;
+        stbuf->st_atime = e->attr.atime;
+        stbuf->st_mtime = e->attr.mtime;
+        stbuf->st_ctime = e->attr.ctime;
 #ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
-        stbuf->st_birthtime = e->ctime;
+        stbuf->st_birthtime = e->attr.ctime;
 #endif
-    } else if ( e->type == ADVFS_REGULAR_FILE ) {
-        stbuf->st_mode = S_IFREG | e->mode;
+    } else if ( e->attr.type == ADVFS_REGULAR_FILE ) {
+        stbuf->st_mode = S_IFREG | e->attr.mode;
         stbuf->st_nlink = 1;
         stbuf->st_uid = ctx->uid;
         stbuf->st_gid = ctx->gid;
         status = 0;
-        stbuf->st_atime = e->atime;
-        stbuf->st_mtime = e->mtime;
-        stbuf->st_ctime = e->ctime;
+        stbuf->st_atime = e->attr.atime;
+        stbuf->st_mtime = e->attr.mtime;
+        stbuf->st_ctime = e->attr.ctime;
 #ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
-        stbuf->st_birthtime = e->ctime;
+        stbuf->st_birthtime = e->attr.ctime;
 #endif
         stbuf->st_rdev = 0;
-        stbuf->st_size = e->u.file.size;
+        stbuf->st_size = e->attr.size;
         stbuf->st_blksize = ADVFS_BLOCK_SIZE;
-        stbuf->st_blocks
-            = (e->u.file.size + ADVFS_BLOCK_SIZE - 1) / ADVFS_BLOCK_SIZE;
+        stbuf->st_blocks = e->attr.n_blocks;
     } else {
         status = -ENOENT;
     }
@@ -394,25 +525,31 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
-    advfs_entry_t *e2;
-    int i;
+    advfs_inode_t *e;
+    advfs_inode_t *inodes;
+    ssize_t i;
+    uint64_t *block;
+    uint64_t b;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
-    if ( NULL == e || e->type != ADVFS_DIR ) {
+    e = advfs_path2inode(advfs, path, 0);
+    if ( NULL == e || e->attr.type != ADVFS_DIR ) {
         /* No entry found or non-directory entry */
         return -ENOENT;
     }
 
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
-    for ( i = 0; i < e->u.dir.nent; i++ ) {
-        e2 = &advfs->entries[e->u.dir.children[i]];
-        filler(buf, e2->name, NULL, 0);
+    for ( i = 0; i < (ssize_t)e->attr.size; i++ ) {
+        assert( i < 512 );
+        b = e->blocks[0];
+        block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+        inodes = (void *)advfs->superblock
+            + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode;
+        filler(buf, inodes[block[i]].name, NULL, 0);
     }
 
     return 0;
@@ -460,13 +597,13 @@ advfs_open(const char *path, struct fuse_file_info *fi)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
@@ -483,18 +620,18 @@ advfs_read(const char *path, char *buf, size_t size, off_t offset,
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     int perm;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
-    if ( e->type != ADVFS_REGULAR_FILE ) {
+    if ( e->attr.type != ADVFS_REGULAR_FILE ) {
         return -EISDIR;
     }
 
@@ -504,11 +641,12 @@ advfs_read(const char *path, char *buf, size_t size, off_t offset,
         return -EACCES;
     }
 
-    if ( offset < (off_t)e->u.file.size ) {
-        if ( offset + size > e->u.file.size ) {
-            size = e->u.file.size - offset;
+    if ( offset < (off_t)e->attr.size ) {
+        if ( offset + size > e->attr.size ) {
+            size = e->attr.size - offset;
         }
-        (void)memcpy(buf, e->u.file.buf + offset, size);
+        /* FIXME */
+        //(void)memcpy(buf, e->u.file.buf + offset, size);
     } else {
         size = 0;
     }
@@ -525,7 +663,7 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     int perm;
     size_t nsize;
     uint8_t *nbuf;
@@ -534,11 +672,11 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
-    if ( e->type != ADVFS_REGULAR_FILE ) {
+    if ( e->attr.type != ADVFS_REGULAR_FILE ) {
         return -EISDIR;
     }
 
@@ -551,10 +689,12 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
         return 0;
     }
 
+    /* FIXME */
+#if 0
     nsize = offset + size;
-    if ( nsize > e->u.file.size ) {
+    if ( nsize > e->attr.size ) {
         /* Reallocate */
-        nbuf = realloc(e->u.file.buf, nsize);
+        nbuf = realloc(e->attr.buf, nsize);
         if ( NULL == nbuf ) {
             return -EDQUOT;
         }
@@ -563,6 +703,7 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
     }
 
     (void)memcpy(e->u.file.buf + offset, buf, size);
+#endif
 
     return size;
 }
@@ -575,21 +716,23 @@ advfs_truncate(const char *path, off_t size)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     uint8_t *nbuf;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
-    if ( e->type != ADVFS_REGULAR_FILE ) {
+    if ( e->attr.type != ADVFS_REGULAR_FILE ) {
         return -EISDIR;
     }
 
+    /* FIXME */
+#if 0
     if ( (off_t)e->u.file.size != size ) {
         if ( size > 0 ) {
             nbuf = realloc(e->u.file.buf, size);
@@ -608,6 +751,7 @@ advfs_truncate(const char *path, off_t size)
         e->u.file.size++;
     }
     e->u.file.size = size;
+#endif
 
     return 0;
 }
@@ -620,20 +764,20 @@ advfs_utimens(const char *path, const struct timespec tv[2])
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         /* No entry found or non-directory entry */
         return -ENOENT;
     }
     if ( NULL != tv ) {
-        e->atime = tv[0].tv_sec;
-        e->mtime = tv[1].tv_sec;
+        e->attr.atime = tv[0].tv_sec;
+        e->attr.mtime = tv[1].tv_sec;
     }
 
     return 0;
@@ -647,7 +791,7 @@ advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     struct timeval tv;
 
     /* Get the context */
@@ -656,22 +800,22 @@ advfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
     gettimeofday(&tv, NULL);
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL != e ) {
         /* Already exists */
         return -EEXIST;
     }
 
-    e = advfs_path2ent(advfs, path, 1);
+    e = advfs_path2inode(advfs, path, 1);
     if ( NULL == e ) {
         /* No entry found or non-directory entry */
         return -EACCES;
     }
-    e->type = ADVFS_REGULAR_FILE;
-    e->mode = mode;
-    e->atime = tv.tv_sec;
-    e->mtime = tv.tv_sec;
-    e->ctime = tv.tv_sec;
+    e->attr.type = ADVFS_REGULAR_FILE;
+    e->attr.mode = mode;
+    e->attr.atime = tv.tv_sec;
+    e->attr.mtime = tv.tv_sec;
+    e->attr.ctime = tv.tv_sec;
 
     return 0;
 }
@@ -684,7 +828,7 @@ advfs_mkdir(const char *path, mode_t mode)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     struct timeval tv;
 
     /* Get the context */
@@ -693,22 +837,22 @@ advfs_mkdir(const char *path, mode_t mode)
 
     gettimeofday(&tv, NULL);
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL != e ) {
         /* Already exists */
         return -EEXIST;
     }
 
-    e = advfs_path2ent(advfs, path, 1);
+    e = advfs_path2inode(advfs, path, 1);
     if ( NULL == e ) {
         /* No entry found or non-directory entry */
         return -EACCES;
     }
-    e->type = ADVFS_DIR;
-    e->mode = mode;
-    e->atime = tv.tv_sec;
-    e->mtime = tv.tv_sec;
-    e->ctime = tv.tv_sec;
+    e->attr.type = ADVFS_DIR;
+    e->attr.mode = mode;
+    e->attr.atime = tv.tv_sec;
+    e->attr.mtime = tv.tv_sec;
+    e->attr.ctime = tv.tv_sec;
 
     return 0;
 }
@@ -721,17 +865,17 @@ advfs_rmdir(const char *path)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
-    if ( e->type != ADVFS_DIR ) {
+    if ( e->attr.type != ADVFS_DIR ) {
         return -ENOTDIR;
     }
 
@@ -746,17 +890,17 @@ advfs_unlink(const char *path)
 {
     struct fuse_context *ctx;
     advfs_t *advfs;
-    advfs_entry_t *e;
+    advfs_inode_t *e;
 
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;
 
-    e = advfs_path2ent(advfs, path, 0);
+    e = advfs_path2inode(advfs, path, 0);
     if ( NULL == e ) {
         return -ENOENT;
     }
-    if ( e->type != ADVFS_REGULAR_FILE ) {
+    if ( e->attr.type != ADVFS_REGULAR_FILE ) {
         return -ENOENT;
     }
 
@@ -803,9 +947,9 @@ main(int argc, char *argv[])
     sblk = blkdev;
 
     /* Ensure that each data structure size must be aligned. */
-    assert( (sizeof(ADVFS_BLOCK_SIZE) % sizeof(advfs_inode_t)) != 0 );
-    ratio = sizeof(ADVFS_BLOCK_SIZE) / sizeof(advfs_inode_t);
-    assert( (ADVFS_INODE_NUM % ratio) != 0 );
+    assert( (ADVFS_BLOCK_SIZE % sizeof(advfs_inode_t)) == 0 );
+    ratio = ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t);
+    assert( (ADVFS_INODE_NUM % ratio) == 0 );
     nblk = (ADVFS_INODE_NUM / ratio);
 
     sblk->ptr_inode = 1;
@@ -843,6 +987,9 @@ main(int argc, char *argv[])
     sblk->root.name[0] = '\0';
 
     advfs.superblock = sblk;
+
+    //printf("%p\n", advfs_path2inode(&advfs, "/test", 1));
+    //printf("%p\n", advfs_path2inode(&advfs, "/test", 0));
 
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
