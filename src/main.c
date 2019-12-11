@@ -148,6 +148,31 @@ typedef struct {
 static advfs_inode_t *
 _path2inode_rec(advfs_t *, advfs_inode_t *, const char *, int);
 
+
+/*
+ * Resolve the block corresponding to the block number b
+ */
+static void *
+_get_block(advfs_t *advfs, uint64_t b)
+{
+    return (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+}
+
+/*
+ * Get the inode corresponding to the inode number nr
+ */
+static advfs_inode_t *
+_get_inodes(advfs_t *advfs, uint64_t nr)
+{
+    uint64_t b;
+    advfs_inode_t *inodes;
+
+    b = advfs->superblock->ptr_inode;
+    inodes = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+
+    return &inodes[nr];
+}
+
 /*
  * Resolve the entry corresponding to the path name
  */
