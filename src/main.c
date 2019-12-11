@@ -145,101 +145,12 @@ typedef struct {
 } advfs_t;
 
 /* Prototype declarations */
-static advfs_entry_t *
-_path2ent_rec(advfs_t *, advfs_entry_t *, const char *, int);
+static advfs_inode_t *
+_path2inode_rec(advfs_t *, advfs_inode_t *, const char *, int);
 
 /*
  * Resolve the entry corresponding to the path name
  */
-static advfs_entry_t *
-_path2ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path, int create)
-{
-    advfs_entry_t *e;
-    char name[ADVFS_NAME_MAX + 1];
-    char *s;
-    size_t len;
-    int i;
-
-    if ( cur->type != ADVFS_DIR ) {
-        return NULL;
-    }
-
-    /* Remove the head '/'s */
-    if ( '/' != *path ) {
-        return NULL;
-    }
-    while ( '/' == *path ) {
-        path++;
-    }
-
-    /* Get the file/directory entry name */
-    s = index(path, '/');
-    if ( NULL == s ) {
-        len = strlen(path);
-    } else {
-        len = s - path;
-    }
-    if ( len > ADVFS_NAME_MAX ) {
-        /* Invalid path name */
-        return NULL;
-    } else if ( len == 0 ) {
-        return cur;
-    }
-    memcpy(name, path, len);
-    name[len] = '\0';
-    path += len;
-
-    /* Resolve the entry */
-    for ( i = 0; i < cur->u.dir.nent; i++ ) {
-        e = &advfs->entries[cur->u.dir.children[i]];
-        if ( 0 == strcmp(name, e->name) ) {
-            /* Found */
-            if ( '\0' == *path ) {
-                return e;
-            } else if ( e->type == ADVFS_DIR ) {
-                return _path2ent_rec(advfs, e, path, create);
-            } else {
-                /* Invalid file type */
-                return NULL;
-            }
-        }
-    }
-
-    /* Not found */
-    if ( '\0' == *path && create ) {
-        /* Create */
-        if ( cur->u.dir.nent >= ADVFS_MAX_CHILDREN ) {
-            return NULL;
-        }
-        /* Search unused inode */
-        for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
-            if ( advfs->entries[i].type == ADVFS_UNUSED ) {
-                break;
-            }
-        }
-        if ( i >= ADVFS_NUM_ENTRIES ) {
-            /* Not found */
-            return NULL;
-        }
-        cur->u.dir.children[cur->u.dir.nent] = i;
-        e = &advfs->entries[i];
-        memset(e, 0, sizeof(advfs_entry_t));
-        memcpy(e->name, name, len + 1);
-        cur->u.dir.nent++;
-        return e;
-    }
-
-    return NULL;
-}
-advfs_entry_t *
-advfs_path2ent(advfs_t *advfs, const char *path, int create)
-{
-    advfs_entry_t *e;
-
-    e = &advfs->entries[advfs->root];
-    return _path2ent_rec(advfs, e, path, create);
-}
-
 static advfs_inode_t *
 _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
                 int create)
