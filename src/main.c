@@ -842,6 +842,8 @@ main(int argc, char *argv[])
     sblk->root.attr.n_blocks = 0;
     sblk->root.name[0] = '\0';
 
+    advfs.superblock = sblk;
+
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
     if ( NULL == advfs.entries ) {
