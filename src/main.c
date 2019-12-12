@@ -227,24 +227,24 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
         idx = i % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
         if ( n < 15 ) {
             b = cur->blocks[n];
-            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            block = _get_block(advfs, b);
         } else {
             b = cur->blocks[15];
-            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            block = _get_block(advfs, b);
             while ( n < (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
                 b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-                block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+                block = _get_block(advfs, b);
                 n -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
             }
             b = block[n];
-            block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            block = _get_block(advfs, b);
         }
         /* inode */
         idx = block[idx];
         b = idx / (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
         n = idx % (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
         b += advfs->superblock->ptr_inode;
-        e = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+        e = _get_block(advfs, b);
         e = &e[n];
 
         if ( 0 == strcmp(name, e->name) ) {
@@ -267,8 +267,7 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
             return NULL;
         }
         /* Search unused inode */
-        inodes = (void *)advfs->superblock
-            + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode;
+        inodes = _get_inodes(advfs, 0);
         for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
             if ( inodes[i].attr.type == ADVFS_UNUSED ) {
                 break;
@@ -281,14 +280,14 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
         if ( cur->attr.n_blocks == 0 ) {
             /* Allocate a block */
             b = advfs->superblock->freelist;
-            fl = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
+            fl = _get_block(advfs, b);
             advfs->superblock->freelist = fl->next;
             cur->blocks[0] = b;
             cur->attr.n_blocks = 1;
         }
         assert ( cur->attr.size < 512 );
         b = cur->blocks[0];
-        block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;;
+        block = _get_block(advfs, b);
         block[cur->attr.size] = i;
         e = &inodes[i];
         memset(e, 0, sizeof(advfs_inode_t));
@@ -482,9 +481,8 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     for ( i = 0; i < (ssize_t)e->attr.size; i++ ) {
         assert( i < 512 );
         b = e->blocks[0];
-        block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
-        inodes = (void *)advfs->superblock
-            + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode;
+        block = _get_block(advfs, b);
+        inodes = _get_inodes(advfs, 0);
         filler(buf, inodes[block[i]].name, NULL, 0);
     }
 
