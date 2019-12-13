@@ -922,9 +922,6 @@ main(int argc, char *argv[])
 
     advfs.superblock = sblk;
 
-    //printf("%p\n", advfs_path2inode(&advfs, "/test", 1));
-    //printf("%p\n", advfs_path2inode(&advfs, "/test", 0));
-
     /* Allocate entries */
     advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
     if ( NULL == advfs.entries ) {
