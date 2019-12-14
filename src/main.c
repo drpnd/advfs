@@ -42,6 +42,7 @@
 #define ADVFS_BLOCK_SIZE        4096
 #define ADVFS_BLOCK_NUM         10240
 #define ADVFS_INODE_NUM         128
+#define ADVFS_INODE_BLOCKPTR    16
 
 /*
  * type
@@ -115,7 +116,7 @@ typedef struct {
     /* Name: 256 bytes */
     char name[ADVFS_NAME_MAX + 1];
     /* Blocks 128 bytes */
-    uint64_t blocks[16];
+    uint64_t blocks[ADVFS_INODE_BLOCKPTR];
 } __attribute__ ((packed, aligned(512))) advfs_inode_t;
 
 /*
@@ -171,6 +172,42 @@ _get_inodes(advfs_t *advfs, uint64_t nr)
     inodes = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
 
     return &inodes[nr];
+}
+
+/*
+ * Get the inode number from the directory
+ */
+static uint64_t
+_get_inode_in_dir(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
+{
+    uint64_t b;
+    uint64_t idx;
+    uint64_t *block;
+    uint64_t bidx;
+
+    /* Get the block index for the specified index nr */
+    bidx = nr / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    idx = nr % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        b = inode->blocks[bidx];
+    } else {
+        /* Resolve from the chain */
+        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, b);
+        bidx -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        b = block[bidx];
+    }
+    block = _get_block(advfs, b);
+
+    /* Get the index to the inode number in the block */
+    return block[idx];
 }
 
 /*
@@ -311,15 +348,19 @@ advfs_path2inode(advfs_t *advfs, const char *path, int create)
  * Remove an entry
  */
 int
-_remove_ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
+_remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
 {
-    advfs_entry_t *e;
+    advfs_inode_t *e;
     char name[ADVFS_NAME_MAX + 1];
     char *s;
     size_t len;
-    int i;
+    ssize_t i;
+    uint64_t b;
+    uint64_t n;
+    uint64_t idx;
+    uint64_t *block;
 
-    if ( cur->type != ADVFS_DIR ) {
+    if ( cur->attr.type != ADVFS_DIR ) {
         return -ENOENT;
     }
 
@@ -349,46 +390,69 @@ _remove_ent_rec(advfs_t *advfs, advfs_entry_t *cur, const char *path)
     path += len;
 
     /* Resolve the entry */
-    for ( i = 0; i < cur->u.dir.nent; i++ ) {
-        e = &advfs->entries[cur->u.dir.children[i]];
+    for ( i = 0; i < (ssize_t)cur->attr.size; i++ ) {
+        n = i / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+        idx = i % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+        if ( n < 15 ) {
+            b = cur->blocks[n];
+            block = _get_block(advfs, b);
+        } else {
+            b = cur->blocks[15];
+            block = _get_block(advfs, b);
+            while ( n < (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+                b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+                block = _get_block(advfs, b);
+                n -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+            }
+            b = block[n];
+            block = _get_block(advfs, b);
+        }
+        /* inode */
+        idx = block[idx];
+        b = idx / (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
+        n = idx % (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
+        b += advfs->superblock->ptr_inode;
+        e = _get_block(advfs, b);
+        e = &e[n];
+
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
             if ( '\0' == *path ) {
                 break;
-            } else if ( e->type == ADVFS_DIR ) {
-                return _remove_ent_rec(advfs, e, path);
+            } else if ( e->attr.type == ADVFS_DIR ) {
+                return _remove_inode_rec(advfs, e, path);
             } else {
                 /* Invalid file type */
                 return -ENOENT;
             }
         }
     }
-    if ( i == cur->u.dir.nent ) {
+    if ( i == (ssize_t)cur->attr.size ) {
         return -ENOENT;
     }
 
     /* Free the entry */
-    e = &advfs->entries[cur->u.dir.children[i]];
-    if ( e->type == ADVFS_DIR && e->u.dir.nent > 0 ) {
+    if ( e->attr.type == ADVFS_DIR && e->attr.size > 0 ) {
         return -ENOTEMPTY;
     }
-    e->type = ADVFS_UNUSED;
+    e->attr.type = ADVFS_UNUSED;
 
     /* Shift the child entries */
-    cur->u.dir.nent--;
-    for ( ; i < cur->u.dir.nent; i++ ) {
-        cur->u.dir.children[i] = cur->u.dir.children[i + 1];
+    e->attr.size--;
+    for ( ; i < (ssize_t)cur->attr.size; i++ ) {
+        _get_inode_in_dir(advfs, e, i);
+        //cur->u.dir.children[i] = cur->u.dir.children[i + 1];
     }
 
     return 0;
 }
 int
-advfs_remove_ent(advfs_t *advfs, const char *path)
+advfs_remove_inode(advfs_t *advfs, const char *path)
 {
-    advfs_entry_t *root;
+    advfs_inode_t *root;
 
-    root = &advfs->entries[advfs->root];
-    return _remove_ent_rec(advfs, root, path);
+    root = &advfs->superblock->root;
+    return _remove_inode_rec(advfs, root, path);
 }
 
 
@@ -813,7 +877,7 @@ advfs_rmdir(const char *path)
         return -ENOTDIR;
     }
 
-    return advfs_remove_ent(advfs, path);
+    return advfs_remove_inode(advfs, path);
 }
 
 /*
@@ -838,7 +902,7 @@ advfs_unlink(const char *path)
         return -ENOENT;
     }
 
-    return advfs_remove_ent(advfs, path);
+    return advfs_remove_inode(advfs, path);
 }
 
 static struct fuse_operations advfs_oper = {
