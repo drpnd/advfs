@@ -224,8 +224,6 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
     size_t len;
     ssize_t i;
     uint64_t b;
-    uint64_t n;
-    uint64_t idx;
     uint64_t *block;
     advfs_free_list_t *fl;
 
