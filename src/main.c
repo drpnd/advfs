@@ -351,6 +351,7 @@ int
 _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
 {
     advfs_inode_t *e;
+    advfs_inode_t *e0;
     char name[ADVFS_NAME_MAX + 1];
     char *s;
     size_t len;
@@ -438,10 +439,11 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
     e->attr.type = ADVFS_UNUSED;
 
     /* Shift the child entries */
-    e->attr.size--;
+    cur->attr.size--;
     for ( ; i < (ssize_t)cur->attr.size; i++ ) {
-        _get_inode_in_dir(advfs, e, i);
-        //cur->u.dir.children[i] = cur->u.dir.children[i + 1];
+        e0 = _get_inodes(advfs, _get_inode_in_dir(advfs, e, i));
+        e = _get_inodes(advfs, _get_inode_in_dir(advfs, e, i + 1));
+        memcpy(e0, e, sizeof(advfs_inode_t));
     }
 
     return 0;
