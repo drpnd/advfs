@@ -163,7 +163,7 @@ _get_block(advfs_t *advfs, uint64_t b)
  * Get the inode corresponding to the inode number nr
  */
 static advfs_inode_t *
-_get_inodes(advfs_t *advfs, uint64_t nr)
+_get_inode(advfs_t *advfs, uint64_t nr)
 {
     uint64_t b;
     advfs_inode_t *inodes;
@@ -260,30 +260,7 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
 
     /* Resolve the entry */
     for ( i = 0; i < (ssize_t)cur->attr.size; i++ ) {
-        n = i / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-        idx = i % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-        if ( n < 15 ) {
-            b = cur->blocks[n];
-            block = _get_block(advfs, b);
-        } else {
-            b = cur->blocks[15];
-            block = _get_block(advfs, b);
-            while ( n < (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
-                b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-                block = _get_block(advfs, b);
-                n -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
-            }
-            b = block[n];
-            block = _get_block(advfs, b);
-        }
-        /* inode */
-        idx = block[idx];
-        b = idx / (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
-        n = idx % (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
-        b += advfs->superblock->ptr_inode;
-        e = _get_block(advfs, b);
-        e = &e[n];
-
+        e = _get_inode(advfs, _get_inode_in_dir(advfs, cur, i));
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
             if ( '\0' == *path ) {
@@ -304,7 +281,7 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
             return NULL;
         }
         /* Search unused inode */
-        inodes = _get_inodes(advfs, 0);
+        inodes = _get_inode(advfs, 0);
         for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
             if ( inodes[i].attr.type == ADVFS_UNUSED ) {
                 break;
@@ -356,10 +333,6 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
     char *s;
     size_t len;
     ssize_t i;
-    uint64_t b;
-    uint64_t n;
-    uint64_t idx;
-    uint64_t *block;
 
     if ( cur->attr.type != ADVFS_DIR ) {
         return -ENOENT;
@@ -392,30 +365,7 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
 
     /* Resolve the entry */
     for ( i = 0; i < (ssize_t)cur->attr.size; i++ ) {
-        n = i / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-        idx = i % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-        if ( n < 15 ) {
-            b = cur->blocks[n];
-            block = _get_block(advfs, b);
-        } else {
-            b = cur->blocks[15];
-            block = _get_block(advfs, b);
-            while ( n < (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
-                b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-                block = _get_block(advfs, b);
-                n -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
-            }
-            b = block[n];
-            block = _get_block(advfs, b);
-        }
-        /* inode */
-        idx = block[idx];
-        b = idx / (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
-        n = idx % (ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t));
-        b += advfs->superblock->ptr_inode;
-        e = _get_block(advfs, b);
-        e = &e[n];
-
+        e = _get_inode(advfs, _get_inode_in_dir(advfs, cur, i));
         if ( 0 == strcmp(name, e->name) ) {
             /* Found */
             if ( '\0' == *path ) {
@@ -441,8 +391,8 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
     /* Shift the child entries */
     cur->attr.size--;
     for ( ; i < (ssize_t)cur->attr.size; i++ ) {
-        e0 = _get_inodes(advfs, _get_inode_in_dir(advfs, e, i));
-        e = _get_inodes(advfs, _get_inode_in_dir(advfs, e, i + 1));
+        e0 = _get_inode(advfs, _get_inode_in_dir(advfs, cur, i));
+        e = _get_inode(advfs, _get_inode_in_dir(advfs, cur, i + 1));
         memcpy(e0, e, sizeof(advfs_inode_t));
     }
 
@@ -548,7 +498,7 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         assert( i < 512 );
         b = e->blocks[0];
         block = _get_block(advfs, b);
-        inodes = _get_inodes(advfs, 0);
+        inodes = _get_inode(advfs, 0);
         filler(buf, inodes[block[i]].name, NULL, 0);
     }
 
