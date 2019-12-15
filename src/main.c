@@ -480,7 +480,6 @@ _write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
     SHA384(buf, ADVFS_BLOCK_SIZE, hash);
     mgt = _get_block_mgt(advfs, pos);
     memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
-    mgt->ref = 1;
 
     if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
