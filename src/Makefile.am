@@ -27,8 +27,8 @@ pkgconfig_DATA = fuse-advfs.pc
 $(pkgconfig_DATA): config.status
 
 bin_PROGRAMS = advfs
-advfs_CPPFLAGS = $(FUSE_CFLAGS)
-advfs_LDADD= $(FUSE_LIBS)
+advfs_CPPFLAGS = $(FUSE_CFLAGS) $(SSL_CFLAGS)
+advfs_LDADD= $(FUSE_LIBS) $(SSL_LIBS)
 advfs_SOURCES = main.c
 
 CLEANFILES = fuse-advfs.pc *~

@@ -36,6 +36,12 @@
 #include <sys/time.h>
 #include <assert.h>
 
+/* OpenSSL */
+#include <openssl/crypto.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
+
 #define ADVFS_NAME_MAX          255
 #define ADVFS_NUM_ENTRIES       100
 #define ADVFS_MAX_CHILDREN      128
@@ -1231,6 +1237,15 @@ main(int argc, char *argv[])
     sblk->root.name[0] = '\0';
 
     advfs.superblock = sblk;
+
+    /* SSL test */
+    unsigned char hash[SHA384_DIGEST_LENGTH];
+    unsigned char str[] = "abc";
+    SHA384(str, strlen((char *)str), hash);
+    for ( i = 0; i < SHA384_DIGEST_LENGTH; i++ ) {
+        printf("%02x", hash[i]);
+    }
+    printf("\n");
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }

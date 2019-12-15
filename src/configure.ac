@@ -60,6 +60,8 @@ PKG_CHECK_MODULES(FUSE, [fuse >= 2.8])
 AC_CHECK_HEADERS([fuse.h])
 
 # Checks for libraries.
+## OpenSSL
+PKG_CHECK_MODULES(SSL, [openssl >= 1.0])
 
 # Checks for header files.
 AC_CHECK_HEADERS([stdlib.h])
