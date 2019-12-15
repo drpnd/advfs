@@ -874,6 +874,12 @@ advfs_read(const char *path, char *buf, size_t size, off_t offset,
     advfs_t *advfs;
     advfs_inode_t *e;
     int perm;
+    uint8_t block[ADVFS_BLOCK_SIZE];
+    off_t pos;
+    ssize_t remain;
+    ssize_t i;
+    ssize_t j;
+    off_t k;
 
     /* Get the context */
     ctx = fuse_get_context();
@@ -893,17 +899,20 @@ advfs_read(const char *path, char *buf, size_t size, off_t offset,
         return -EACCES;
     }
 
-    if ( offset < (off_t)e->attr.size ) {
-        if ( offset + size > e->attr.size ) {
-            size = e->attr.size - offset;
+    remain = size;
+    k = 0;
+    while ( remain > 0 ) {
+        pos = offset / ADVFS_BLOCK_SIZE;
+        _read_block(advfs, e, block, pos);
+        for ( i = (offset % ADVFS_BLOCK_SIZE), j = 0;
+              i < ADVFS_BLOCK_SIZE && j < remain; i++, j++, k++ ) {
+            buf[k] = block[j];
         }
-        /* FIXME */
-        //(void)memcpy(buf, e->u.file.buf + offset, size);
-    } else {
-        size = 0;
+        offset += j;
+        remain -= j;
     }
 
-    return size;
+    return k;
 }
 
 /*
@@ -918,7 +927,13 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
     advfs_inode_t *e;
     int perm;
     size_t nsize;
-    uint8_t *nbuf;
+    uint64_t nb;
+    int ret;
+    ssize_t i;
+    ssize_t j;
+    ssize_t remain;
+    off_t pos;
+    uint8_t block[ADVFS_BLOCK_SIZE];
 
     /* Get the context */
     ctx = fuse_get_context();
@@ -941,21 +956,31 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
         return 0;
     }
 
-    /* FIXME */
-#if 0
+    /* Resize the block region */
     nsize = offset + size;
+    nb = (nsize + ADVFS_BLOCK_SIZE - 1) / ADVFS_BLOCK_SIZE;
+    ret = _resize_block(advfs, e, nb);
+    if ( 0 != ret ) {
+        return -EFAULT;
+    }
     if ( nsize > e->attr.size ) {
-        /* Reallocate */
-        nbuf = realloc(e->attr.buf, nsize);
-        if ( NULL == nbuf ) {
-            return -EDQUOT;
-        }
-        e->u.file.buf = nbuf;
-        e->u.file.size = nsize;
+        e->attr.size = nsize;
     }
 
-    (void)memcpy(e->u.file.buf + offset, buf, size);
-#endif
+    remain = size;
+    while ( remain > 0 ) {
+        if ( 0 != (offset % ADVFS_BLOCK_SIZE) ) {
+            pos = offset / ADVFS_BLOCK_SIZE;
+            _read_block(advfs, e, block, pos);
+            for ( i = (offset % ADVFS_BLOCK_SIZE), j = 0;
+                  i < ADVFS_BLOCK_SIZE && j < remain; i++, j++ ) {
+                block[i] = buf[j];
+            }
+            _write_block(advfs, e, block, pos);
+        }
+        offset += j;
+        remain -= j;
+    }
 
     return size;
 }
@@ -996,9 +1021,7 @@ advfs_truncate(const char *path, off_t size)
 
     while ( (off_t)e->attr.size < size ) {
         pos = e->attr.size / ADVFS_BLOCK_SIZE;
-        if ( 0 != e->attr.size % ADVFS_BLOCK_SIZE ) {
-            _read_block(advfs, e, block, pos);
-        }
+        _read_block(advfs, e, block, pos);
         for ( i = e->attr.size % ADVFS_BLOCK_SIZE;
               i < ADVFS_BLOCK_SIZE && (off_t)e->attr.size < size; i++ ) {
             block[i] = 0;
