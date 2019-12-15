@@ -360,10 +360,7 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
     char *s;
     size_t len;
     ssize_t i;
-    uint64_t b;
-    uint64_t *block;
     uint64_t inode;
-    advfs_free_list_t *fl;
 
     if ( cur->attr.type != ADVFS_DIR ) {
         return NULL;
