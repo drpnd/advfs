@@ -175,6 +175,8 @@ _alloc_block(advfs_t *advfs)
     fl = _get_block(advfs, b);
     advfs->superblock->freelist = fl->next;
 
+    advfs->superblock->n_block_used++;
+
     return b;
 }
 
@@ -189,6 +191,8 @@ _free_block(advfs_t *advfs, uint64_t b)
     fl = _get_block(advfs, b);
     fl->next = advfs->superblock->freelist;
     advfs->superblock->freelist = b;
+
+    advfs->superblock->n_block_used--;
 }
 
 /*
@@ -204,6 +208,143 @@ _get_inode(advfs_t *advfs, uint64_t nr)
     inodes = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
 
     return &inodes[nr];
+}
+
+/*
+ * Increase the block
+ */
+static int
+_increase_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
+{
+    uint64_t b1;
+    uint64_t b2;
+    uint64_t pos;
+    uint64_t *block;
+    ssize_t i;
+    int alloc;
+
+    block = e->blocks;
+    pos = 0;
+    for ( i = 0; i < (ssize_t)nb; i++ ) {
+        alloc = (i >= (ssize_t)e->attr.n_blocks) ? 1 : 0;
+
+        b2 = 0;
+        /* Next chain */
+        if ( i == ADVFS_INODE_BLOCKPTR - 1 ) {
+            if ( alloc ) {
+                b2 = _alloc_block(advfs);
+                if ( 0 == b2 ) {
+                    return -1;
+                }
+                block[ADVFS_INODE_BLOCKPTR - 1] = b2;
+            } else {
+                b2 = block[ADVFS_INODE_BLOCKPTR - 1];
+            }
+            block = _get_block(advfs, b2);
+            pos = 0;
+        } else if ( pos == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            if ( alloc ) {
+                b2 = _alloc_block(advfs);
+                if ( 0 == b2 ) {
+                    return -1;
+                }
+                block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1] = b2;
+            } else {
+                b2 = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            }
+            block = _get_block(advfs, b2);
+            pos = 0;
+        }
+
+        if ( alloc ) {
+            /* Allocate */
+            b1 = _alloc_block(advfs);
+            if ( 0 == b1 ) {
+                if ( 0 != b2 ) {
+                    _free_block(advfs, b2);
+                }
+                return -1;
+            }
+            block[pos] = b1;
+            e->attr.n_blocks++;
+        }
+        pos++;
+    }
+
+    return 0;
+}
+
+/*
+ * Shrink the block
+ */
+static int
+_shrink_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
+{
+    uint64_t fb;
+    uint64_t b;
+    uint64_t pos;
+    uint64_t *block;
+    ssize_t i;
+    int free;
+
+    block = e->blocks;
+    pos = 0;
+    fb = 0;
+    for ( i = 0; i < (ssize_t)nb; i++ ) {
+        free = (i >= (ssize_t)nb) ? 1 : 0;
+
+        /* Next chain */
+        if ( i == ADVFS_INODE_BLOCKPTR - 1 ) {
+            if ( 0 != fb ) {
+                _free_block(advfs, fb);
+            }
+            b = block[ADVFS_INODE_BLOCKPTR - 1];
+            block = _get_block(advfs, b);
+            pos = 0;
+            if ( free ) {
+                fb = b;
+            }
+        } else if ( pos == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            if ( 0 != fb ) {
+                _free_block(advfs, fb);
+            }
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            pos = 0;
+            if ( free ) {
+                fb = b;
+            }
+        }
+
+        if ( free ) {
+            _free_block(advfs, block[pos]);
+        }
+        pos++;
+    }
+    if ( 0 != fb ) {
+        _free_block(advfs, fb);
+    }
+
+    e->attr.n_blocks = nb;
+
+    return 0;
+}
+
+/*
+ * Resize
+ */
+static int
+_resize_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
+{
+    if ( nb < e->attr.n_blocks ) {
+        /* Shrink the file size */
+        return _shrink_block(advfs, e, nb);
+    } else if ( nb > e->attr.n_blocks ) {
+        /* Increase the file size */
+        return _increase_block(advfs, e, nb);
+    } else {
+        return 0;
+    }
 }
 
 /*
@@ -243,7 +384,7 @@ _get_inode_in_dir(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
 }
 
 /*
- * Append the entry
+ * Set an entry to the directory
  */
 static int
 _set_inode_in_dir(advfs_t *advfs, advfs_inode_t *dir, uint64_t inode)
@@ -253,62 +394,28 @@ _set_inode_in_dir(advfs_t *advfs, advfs_inode_t *dir, uint64_t inode)
     uint64_t idx;
     uint64_t *block;
     uint64_t bidx;
-    int i;
+    int ret;
 
     if ( dir->attr.type != ADVFS_DIR ) {
         return -1;
     }
 
     /* Get the block index for the specified index nr */
-    nb = dir->attr.size / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    bidx = dir->attr.size / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    nb = bidx + 1;
     idx = dir->attr.size % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
 
-    /* Allocate the missing blocks */
-    while ( dir->attr.n_blocks <= nb
-            && dir->attr.n_blocks < ADVFS_INODE_BLOCKPTR ) {
-        b = _alloc_block(advfs);
-        if ( 0 == b ) {
-            return -1;
-        }
-        dir->blocks[dir->attr.n_blocks] = b;
-        dir->attr.n_blocks++;
-    }
-    b = dir->blocks[ADVFS_INODE_BLOCKPTR - 1];
-    block = _get_block(advfs, b);
-    i = 0;
-    while ( dir->attr.n_blocks <= nb ) {
-        b = _alloc_block(advfs);
-        if ( 0 == b ) {
-            return -1;
-        }
-        block[i] = b;
-        dir->attr.n_blocks++;
-        i++;
-        if ( i == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
-            b = _alloc_block(advfs);
-            if ( 0 == b ) {
-                return -1;
-            }
-            block[i] = b;
-            block = _get_block(advfs, b);
-            i = 0;
-        }
+    /* Increase the block region */
+    ret = _resize_block(advfs, dir, nb);
+    if ( 0 != ret ) {
+        return -1;
     }
 
-    bidx = nb;
     if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
         b = dir->blocks[bidx];
     } else {
         /* Resolve from the chain */
-        while ( dir->attr.n_blocks <= ADVFS_INODE_BLOCKPTR - 1 ) {
-            b = _alloc_block(advfs);
-            if ( 0 == b ) {
-                return -1;
-            }
-            dir->blocks[dir->attr.n_blocks] = b;
-            dir->attr.n_blocks++;
-        }
         b = dir->blocks[ADVFS_INODE_BLOCKPTR - 1];
         block = _get_block(advfs, b);
         bidx -= ADVFS_INODE_BLOCKPTR - 1;
@@ -323,6 +430,74 @@ _set_inode_in_dir(advfs_t *advfs, advfs_inode_t *dir, uint64_t inode)
     block = _get_block(advfs, b);
     block[idx] = inode;
     dir->attr.size++;
+
+    return 0;
+}
+
+/*
+ * Read a block
+ */
+static int
+_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+{
+    uint64_t b;
+    uint64_t *block;
+    uint64_t bidx;
+
+    /* Get the block index for the specified index pos */
+    bidx = pos / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        b = inode->blocks[bidx];
+    } else {
+        /* Resolve from the chain */
+        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, b);
+        bidx -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        b = block[bidx];
+    }
+    block = _get_block(advfs, b);
+    memcpy(buf, block, ADVFS_BLOCK_SIZE);
+
+    return 0;
+}
+
+/*
+ * Write a block
+ */
+static int
+_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+{
+    uint64_t b;
+    uint64_t *block;
+    uint64_t bidx;
+
+    /* Get the block index for the specified index pos */
+    bidx = pos / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        b = inode->blocks[bidx];
+    } else {
+        /* Resolve from the chain */
+        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, b);
+        bidx -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        b = block[bidx];
+    }
+    block = _get_block(advfs, b);
+    memcpy(block, buf, ADVFS_BLOCK_SIZE);
 
     return 0;
 }
@@ -452,6 +627,8 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
     char *s;
     size_t len;
     ssize_t i;
+    uint64_t nb;
+    int ret;
 
     if ( cur->attr.type != ADVFS_DIR ) {
         return -ENOENT;
@@ -515,6 +692,14 @@ _remove_inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path)
         memcpy(e0, e, sizeof(advfs_inode_t));
     }
 
+    /* Resize */
+    nb = (cur->attr.size + (ADVFS_BLOCK_SIZE / sizeof(uint64_t)) - 1)
+        / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    ret = _resize_block(advfs, cur, nb);
+    if ( 0 != ret ) {
+        return -EFAULT;
+    }
+
     return 0;
 }
 int
@@ -563,6 +748,10 @@ advfs_getattr(const char *path, struct stat *stbuf)
 #ifdef HAVE_STRUCT_STAT_ST_BIRTHTIME
         stbuf->st_birthtime = e->attr.ctime;
 #endif
+        stbuf->st_rdev = 0;
+        stbuf->st_size = e->attr.n_blocks * ADVFS_BLOCK_SIZE;
+        stbuf->st_blksize = ADVFS_BLOCK_SIZE;
+        stbuf->st_blocks = e->attr.n_blocks;
     } else if ( e->attr.type == ADVFS_REGULAR_FILE ) {
         stbuf->st_mode = S_IFREG | e->attr.mode;
         stbuf->st_nlink = 1;
@@ -786,7 +975,10 @@ advfs_truncate(const char *path, off_t size)
     struct fuse_context *ctx;
     advfs_t *advfs;
     advfs_inode_t *e;
-    uint8_t *nbuf;
+    uint64_t nb;
+    uint8_t block[ADVFS_BLOCK_SIZE];
+    int i;
+    int ret;
 
     /* Get the context */
     ctx = fuse_get_context();
@@ -800,27 +992,25 @@ advfs_truncate(const char *path, off_t size)
         return -EISDIR;
     }
 
-    /* FIXME */
-#if 0
-    if ( (off_t)e->u.file.size != size ) {
-        if ( size > 0 ) {
-            nbuf = realloc(e->u.file.buf, size);
-            if ( NULL == nbuf ) {
-                return -EFBIG;
-            }
-            e->u.file.buf = nbuf;
-        } else {
-            free(e->u.file.buf);
-            e->u.file.buf = NULL;
-        }
+    /* Calculate the number of blocks */
+    nb = (size + ADVFS_BLOCK_SIZE - 1) / ADVFS_BLOCK_SIZE;
+    ret = _resize_block(advfs, e, nb);
+    if ( 0 != ret ) {
+        return -EFAULT;
     }
 
-    while ( (off_t)e->u.file.size < size ) {
-        e->u.file.buf[e->u.file.size] = 0;
-        e->u.file.size++;
+    while ( (off_t)e->attr.size < size ) {
+        if ( 0 != e->attr.size % ADVFS_BLOCK_SIZE ) {
+            _read_block(advfs, e, block, e->attr.size);
+        }
+        for ( i = e->attr.size % ADVFS_BLOCK_SIZE;
+              i < ADVFS_BLOCK_SIZE && (off_t)e->attr.size < size; i++ ) {
+            block[i] = 0;
+            e->attr.size++;
+        }
+        _write_block(advfs, e, block, e->attr.size);
     }
-    e->u.file.size = size;
-#endif
+    e->attr.size = size;
 
     return 0;
 }
@@ -1037,9 +1227,10 @@ main(int argc, char *argv[])
     /* Initialize all blocks */
     block = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_block;
     fl = block;
-    for ( i = 0; i < (ssize_t)sblk->n_inodes - 1; i++ ) {
+    for ( i = 0; i < (ssize_t)sblk->n_blocks - 1; i++ ) {
         fl->next = sblk->ptr_block + i + 1;
-        fl = block + ADVFS_BLOCK_SIZE;
+        block += ADVFS_BLOCK_SIZE;
+        fl = block;
     }
     fl->next = 0;
     sblk->freelist = sblk->ptr_block;
