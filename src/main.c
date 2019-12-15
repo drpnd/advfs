@@ -442,25 +442,22 @@ _read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
 {
     uint64_t b;
     uint64_t *block;
-    uint64_t bidx;
 
-    /* Get the block index for the specified index pos */
-    bidx = pos / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
-        b = inode->blocks[bidx];
+        b = inode->blocks[pos];
     } else {
         /* Resolve from the chain */
         b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
         block = _get_block(advfs, b);
-        bidx -= ADVFS_INODE_BLOCKPTR - 1;
-        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+        pos -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             /* Get the next chain */
             b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
             block = _get_block(advfs, b);
-            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
         }
-        b = block[bidx];
+        b = block[pos];
     }
     block = _get_block(advfs, b);
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
@@ -476,25 +473,22 @@ _write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
 {
     uint64_t b;
     uint64_t *block;
-    uint64_t bidx;
 
-    /* Get the block index for the specified index pos */
-    bidx = pos / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
-    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
-        b = inode->blocks[bidx];
+        b = inode->blocks[pos];
     } else {
         /* Resolve from the chain */
         b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
         block = _get_block(advfs, b);
-        bidx -= ADVFS_INODE_BLOCKPTR - 1;
-        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+        pos -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             /* Get the next chain */
             b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
             block = _get_block(advfs, b);
-            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
         }
-        b = block[bidx];
+        b = block[pos];
     }
     block = _get_block(advfs, b);
     memcpy(block, buf, ADVFS_BLOCK_SIZE);
@@ -979,6 +973,7 @@ advfs_truncate(const char *path, off_t size)
     uint8_t block[ADVFS_BLOCK_SIZE];
     int i;
     int ret;
+    uint64_t pos;
 
     /* Get the context */
     ctx = fuse_get_context();
@@ -1000,15 +995,16 @@ advfs_truncate(const char *path, off_t size)
     }
 
     while ( (off_t)e->attr.size < size ) {
+        pos = e->attr.size / ADVFS_BLOCK_SIZE;
         if ( 0 != e->attr.size % ADVFS_BLOCK_SIZE ) {
-            _read_block(advfs, e, block, e->attr.size);
+            _read_block(advfs, e, block, pos);
         }
         for ( i = e->attr.size % ADVFS_BLOCK_SIZE;
               i < ADVFS_BLOCK_SIZE && (off_t)e->attr.size < size; i++ ) {
             block[i] = 0;
             e->attr.size++;
         }
-        _write_block(advfs, e, block, e->attr.size);
+        _write_block(advfs, e, block, pos);
     }
     e->attr.size = size;
 
