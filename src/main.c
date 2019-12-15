@@ -145,6 +145,21 @@ _get_block(advfs_t *advfs, uint64_t b)
 }
 
 /*
+ * Resolve the block management data structure for the block number b
+ */
+static advfs_block_mgt_t *
+_get_block_mgt(advfs_t *advfs, uint64_t b)
+{
+    uint64_t off;
+    advfs_block_mgt_t *mgt;
+
+    off = advfs->superblock->ptr_block_mgt;
+    mgt = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * off;
+
+    return &mgt[b];
+}
+
+/*
  * Allocate a new block
  */
 static uint64_t
@@ -458,6 +473,14 @@ _write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
 {
     uint64_t b;
     uint64_t *block;
+    unsigned char hash[SHA384_DIGEST_LENGTH];
+    advfs_block_mgt_t *mgt;
+
+    /* Calculate the hash value */
+    SHA384(buf, ADVFS_BLOCK_SIZE, hash);
+    mgt = _get_block_mgt(advfs, pos);
+    memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
+    mgt->ref = 1;
 
     if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
@@ -1264,15 +1287,6 @@ main(int argc, char *argv[])
     sblk->root.name[0] = '\0';
 
     advfs.superblock = sblk;
-
-    /* SSL test */
-    unsigned char hash[SHA384_DIGEST_LENGTH];
-    unsigned char str[] = "abc";
-    SHA384(str, strlen((char *)str), hash);
-    for ( i = 0; i < SHA384_DIGEST_LENGTH; i++ ) {
-        printf("%02x", hash[i]);
-    }
-    printf("\n");
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
