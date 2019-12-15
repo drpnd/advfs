@@ -53,40 +53,6 @@ typedef enum {
     ADVFS_DIR,
 } advfs_entry_type_t;
 
-typedef struct _advfs_entry advfs_entry_t;
-
-/*
- * Regular file
- */
-typedef struct {
-    uint8_t *buf;
-    size_t size;
-} advfs_entry_file_t;
-
-/*
- * Directory
- */
-typedef struct {
-    int nent;
-    int children[ADVFS_MAX_CHILDREN];
-} advfs_entry_dir_t;
-
-/*
- * entry
- */
-struct _advfs_entry {
-    char name[ADVFS_NAME_MAX + 1];
-    advfs_entry_type_t type;
-    int mode;
-    time_t atime;
-    time_t mtime;
-    time_t ctime;
-    union {
-        advfs_entry_file_t file;
-        advfs_entry_dir_t dir;
-    } u;
-};
-
 /*
  * free list
  */
@@ -141,7 +107,6 @@ typedef struct {
  */
 typedef struct {
     int root;
-    advfs_entry_t *entries;
     advfs_superblock_t *superblock;
 } advfs_t;
 
@@ -1266,26 +1231,6 @@ main(int argc, char *argv[])
     sblk->root.name[0] = '\0';
 
     advfs.superblock = sblk;
-
-    /* Allocate entries */
-    advfs.entries = malloc(sizeof(advfs_entry_t) * ADVFS_NUM_ENTRIES);
-    if ( NULL == advfs.entries ) {
-        return -1;
-    }
-    for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
-        advfs.entries[i].type = ADVFS_UNUSED;
-    }
-
-    /* root directory */
-    gettimeofday(&tv, NULL);
-    advfs.root = 0;
-    advfs.entries[advfs.root].type = ADVFS_DIR;
-    advfs.entries[advfs.root].name[0] = '\0';
-    advfs.entries[advfs.root].mode = 0777;
-    advfs.entries[advfs.root].atime = tv.tv_sec;
-    advfs.entries[advfs.root].mtime = tv.tv_sec;
-    advfs.entries[advfs.root].ctime = tv.tv_sec;
-    advfs.entries[advfs.root].u.dir.nent = 0;
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
