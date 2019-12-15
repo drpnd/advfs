@@ -160,6 +160,38 @@ _get_block(advfs_t *advfs, uint64_t b)
 }
 
 /*
+ * Allocate a new block
+ */
+static uint64_t
+_alloc_block(advfs_t *advfs)
+{
+    uint64_t b;
+    advfs_free_list_t *fl;
+
+    b = advfs->superblock->freelist;
+    if ( 0 == b ) {
+        return 0;
+    }
+    fl = _get_block(advfs, b);
+    advfs->superblock->freelist = fl->next;
+
+    return b;
+}
+
+/*
+ * Release a block
+ */
+static void
+_free_block(advfs_t *advfs, uint64_t b)
+{
+    advfs_free_list_t *fl;
+
+    fl = _get_block(advfs, b);
+    fl->next = advfs->superblock->freelist;
+    advfs->superblock->freelist = b;
+}
+
+/*
  * Get the inode corresponding to the inode number nr
  */
 static advfs_inode_t *
@@ -211,20 +243,126 @@ _get_inode_in_dir(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
 }
 
 /*
+ * Append the entry
+ */
+static int
+_set_inode_in_dir(advfs_t *advfs, advfs_inode_t *dir, uint64_t inode)
+{
+    uint64_t nb;
+    uint64_t b;
+    uint64_t idx;
+    uint64_t *block;
+    uint64_t bidx;
+    int i;
+
+    if ( dir->attr.type != ADVFS_DIR ) {
+        return -1;
+    }
+
+    /* Get the block index for the specified index nr */
+    nb = dir->attr.size / (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+    idx = dir->attr.size % (ADVFS_BLOCK_SIZE / sizeof(uint64_t));
+
+    /* Allocate the missing blocks */
+    while ( dir->attr.n_blocks <= nb
+            && dir->attr.n_blocks < ADVFS_INODE_BLOCKPTR ) {
+        b = _alloc_block(advfs);
+        if ( 0 == b ) {
+            return -1;
+        }
+        dir->blocks[dir->attr.n_blocks] = b;
+        dir->attr.n_blocks++;
+    }
+    b = dir->blocks[ADVFS_INODE_BLOCKPTR - 1];
+    block = _get_block(advfs, b);
+    i = 0;
+    while ( dir->attr.n_blocks <= nb ) {
+        b = _alloc_block(advfs);
+        if ( 0 == b ) {
+            return -1;
+        }
+        block[i] = b;
+        dir->attr.n_blocks++;
+        i++;
+        if ( i == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            b = _alloc_block(advfs);
+            if ( 0 == b ) {
+                return -1;
+            }
+            block[i] = b;
+            block = _get_block(advfs, b);
+            i = 0;
+        }
+    }
+
+    bidx = nb;
+    if ( bidx < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        b = dir->blocks[bidx];
+    } else {
+        /* Resolve from the chain */
+        while ( dir->attr.n_blocks <= ADVFS_INODE_BLOCKPTR - 1 ) {
+            b = _alloc_block(advfs);
+            if ( 0 == b ) {
+                return -1;
+            }
+            dir->blocks[dir->attr.n_blocks] = b;
+            dir->attr.n_blocks++;
+        }
+        b = dir->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, b);
+        bidx -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( bidx >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            bidx -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        b = block[bidx];
+    }
+    block = _get_block(advfs, b);
+    block[idx] = inode;
+    dir->attr.size++;
+
+    return 0;
+}
+
+/*
+ * Find a free inode
+ */
+static int
+_find_free_inode(advfs_t *advfs, uint64_t *nr)
+{
+    ssize_t i;
+    advfs_inode_t *inode;
+
+    for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
+        inode = _get_inode(advfs, i);
+        if ( inode->attr.type == ADVFS_UNUSED ) {
+            *nr = i;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
+/*
  * Resolve the entry corresponding to the path name
  */
 static advfs_inode_t *
 _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
                 int create)
 {
+    int ret;
     advfs_inode_t *e;
-    advfs_inode_t *inodes;
     char name[ADVFS_NAME_MAX + 1];
     char *s;
     size_t len;
     ssize_t i;
     uint64_t b;
     uint64_t *block;
+    uint64_t inode;
     advfs_free_list_t *fl;
 
     if ( cur->attr.type != ADVFS_DIR ) {
@@ -278,33 +416,19 @@ _path2inode_rec(advfs_t *advfs, advfs_inode_t *cur, const char *path,
         if ( cur->attr.size >= ADVFS_MAX_CHILDREN ) {
             return NULL;
         }
-        /* Search unused inode */
-        inodes = _get_inode(advfs, 0);
-        for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
-            if ( inodes[i].attr.type == ADVFS_UNUSED ) {
-                break;
-            }
-        }
-        if ( i >= ADVFS_NUM_ENTRIES ) {
-            /* Not found */
+        /* Search an unused inode */
+        ret = _find_free_inode(advfs, &inode);
+        if ( 0 != ret ) {
             return NULL;
         }
-        if ( cur->attr.n_blocks == 0 ) {
-            /* Allocate a block */
-            b = advfs->superblock->freelist;
-            fl = _get_block(advfs, b);
-            advfs->superblock->freelist = fl->next;
-            cur->blocks[0] = b;
-            cur->attr.n_blocks = 1;
+        ret = _set_inode_in_dir(advfs, cur, inode);
+        if ( 0 != ret ) {
+            return NULL;
         }
-        assert ( cur->attr.size < 512 );
-        b = cur->blocks[0];
-        block = _get_block(advfs, b);
-        block[cur->attr.size] = i;
-        e = &inodes[i];
+        e = _get_inode(advfs, inode);
         memset(e, 0, sizeof(advfs_inode_t));
         memcpy(e->name, name, len + 1);
-        cur->attr.size++;
+
         return e;
     }
 
