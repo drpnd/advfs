@@ -29,7 +29,7 @@ $(pkgconfig_DATA): config.status
 bin_PROGRAMS = advfs
 advfs_CPPFLAGS = $(FUSE_CFLAGS) $(SSL_CFLAGS)
 advfs_LDADD= $(FUSE_LIBS) $(SSL_LIBS)
-advfs_SOURCES = main.c
+advfs_SOURCES = main.c advfs.h init.c ramblock.c
 
 CLEANFILES = fuse-advfs.pc *~
 

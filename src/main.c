@@ -21,9 +21,8 @@
  * SOFTWARE.
  */
 
-#define FUSE_USE_VERSION  28
-
 #include "config.h"
+#include "advfs.h"
 #include <fuse.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,104 +35,9 @@
 #include <sys/time.h>
 #include <assert.h>
 
-/* OpenSSL */
-#include <openssl/crypto.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <openssl/rand.h>
-
-#define ADVFS_NAME_MAX          255
-#define ADVFS_NUM_ENTRIES       100
-#define ADVFS_MAX_CHILDREN      128
-#define ADVFS_BLOCK_SIZE        4096
-#define ADVFS_BLOCK_NUM         10240
-#define ADVFS_INODE_NUM         128
-#define ADVFS_INODE_BLOCKPTR    16
-
-/*
- * type
- */
-typedef enum {
-    ADVFS_UNUSED,
-    ADVFS_REGULAR_FILE,
-    ADVFS_DIR,
-} advfs_entry_type_t;
-
-/*
- * free list
- */
-typedef struct {
-    uint64_t next;
-} advfs_free_list_t;
-
-/*
- * Block management
- */
-typedef struct {
-    /* Hash */
-    unsigned char hash[SHA384_DIGEST_LENGTH];
-    /* Reference counter */
-    uint64_t ref;
-    /* Left */
-    uint64_t left;
-    /* Right */
-    uint64_t right;
-} __attribute__ ((packed, aligned(128))) advfs_block_mgt_t;
-
-/*
- * inode attribute
- */
-typedef struct {
-    uint64_t type;
-    uint64_t mode;
-    uint64_t atime;
-    uint64_t mtime;
-    uint64_t ctime;
-    uint64_t size;
-    uint64_t n_blocks;
-} __attribute__ ((packed, aligned(128))) advfs_inode_attr_t;
-
-/*
- * inode
- */
-typedef struct {
-    /* Attributes: 128 bytes */
-    advfs_inode_attr_t attr;
-    /* Name: 256 bytes */
-    char name[ADVFS_NAME_MAX + 1];
-    /* Blocks 128 bytes */
-    uint64_t blocks[ADVFS_INODE_BLOCKPTR];
-} __attribute__ ((packed, aligned(512))) advfs_inode_t;
-
-/*
- * advfs superblock
- */
-typedef struct {
-    uint64_t ptr_inode;
-    uint64_t ptr_block_mgt;
-    uint64_t ptr_block;
-    /* # of inodes */
-    uint64_t n_inodes;
-    uint64_t n_inode_used;
-    /* # of blocks */
-    uint64_t n_blocks;
-    uint64_t n_block_used;
-    uint64_t freelist;
-    /* Root inode */
-    advfs_inode_t root;
-} __attribute__ ((packed, aligned(ADVFS_BLOCK_SIZE))) advfs_superblock_t;
-
-/*
- * advfs data structure
- */
-typedef struct {
-    advfs_superblock_t *superblock;
-} advfs_t;
-
 /* Prototype declarations */
 static advfs_inode_t *
 _path2inode_rec(advfs_t *, advfs_inode_t *, const char *, int);
-
 
 /*
  * Resolve the block corresponding to the block number b
@@ -786,10 +690,8 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     struct fuse_context *ctx;
     advfs_t *advfs;
     advfs_inode_t *e;
-    advfs_inode_t *inodes;
+    advfs_inode_t *inode;
     ssize_t i;
-    uint64_t *block;
-    uint64_t b;
 
     /* Get the context */
     ctx = fuse_get_context();
@@ -804,11 +706,8 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     filler(buf, ".", NULL, 0);
     filler(buf, "..", NULL, 0);
     for ( i = 0; i < (ssize_t)e->attr.size; i++ ) {
-        assert( i < 512 );
-        b = e->blocks[0];
-        block = _get_block(advfs, b);
-        inodes = _get_inode(advfs, 0);
-        filler(buf, inodes[block[i]].name, NULL, 0);
+        inode = _get_inode(advfs, _get_inode_in_dir(advfs, e, i));
+        filler(buf, inode->name, NULL, 0);
     }
 
     return 0;
@@ -1214,78 +1113,13 @@ int
 main(int argc, char *argv[])
 {
     advfs_t advfs;
-    ssize_t i;
-    struct timeval tv;
-    void *blkdev;
-    advfs_superblock_t *sblk;
-    advfs_inode_t *inode;
-    advfs_block_mgt_t *mgt;
-    void *block;
-    int ratio;
-    int nblk_inode;
-    int nblk_mgt;
-    advfs_free_list_t *fl;
+    int ret;
 
-    /* Initialize the block device */
-    blkdev = malloc(ADVFS_BLOCK_SIZE * ADVFS_BLOCK_NUM);
-    if ( NULL == blkdev ) {
-        return -1;
+    /* Initialize */
+    ret = advfs_init(&advfs);
+    if ( 0 != ret ) {
+        return EXIT_FAILURE;
     }
-    sblk = blkdev;
-
-    /* Ensure that each data structure size must be aligned. */
-    assert( (ADVFS_BLOCK_SIZE % sizeof(advfs_inode_t)) == 0 );
-    ratio = ADVFS_BLOCK_SIZE / sizeof(advfs_inode_t);
-    assert( (ADVFS_INODE_NUM % ratio) == 0 );
-    nblk_inode = (ADVFS_INODE_NUM / ratio);
-
-    assert( (ADVFS_BLOCK_SIZE % sizeof(advfs_block_mgt_t)) == 0 );
-    ratio = ADVFS_BLOCK_SIZE / sizeof(advfs_block_mgt_t);
-    nblk_mgt = (ADVFS_BLOCK_NUM / ratio);
-
-    sblk->ptr_inode = 1;
-    sblk->n_inodes = ADVFS_INODE_NUM;
-    sblk->n_inode_used = 0;
-    sblk->ptr_block_mgt = 1 + nblk_inode;
-    sblk->ptr_block = 1 + nblk_inode + nblk_mgt;
-    sblk->n_blocks = ADVFS_BLOCK_NUM - (1 + nblk_inode + nblk_mgt);
-    sblk->n_block_used = 0;
-
-    /* Initialize all inodes */
-    inode = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_inode;
-    for ( i = 0; i < (ssize_t)sblk->n_inodes; i++ ) {
-        inode[i].attr.type = ADVFS_UNUSED;
-    }
-
-    /* Initialize the block management array */
-    mgt = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_block_mgt;
-    for ( i = 0; i < (ssize_t)sblk->n_blocks; i++ ) {
-        mgt[i].ref = 0;
-    }
-
-    /* Initialize all blocks */
-    block = blkdev + ADVFS_BLOCK_SIZE * sblk->ptr_block;
-    fl = block;
-    for ( i = 0; i < (ssize_t)sblk->n_blocks - 1; i++ ) {
-        fl->next = sblk->ptr_block + i + 1;
-        block += ADVFS_BLOCK_SIZE;
-        fl = block;
-    }
-    fl->next = 0;
-    sblk->freelist = sblk->ptr_block;
-
-    /* Initialize the root inode */
-    gettimeofday(&tv, NULL);
-    sblk->root.attr.type = ADVFS_DIR;
-    sblk->root.attr.mode = S_IFDIR | 0777;
-    sblk->root.attr.atime = tv.tv_sec;
-    sblk->root.attr.mtime = tv.tv_sec;
-    sblk->root.attr.ctime = tv.tv_sec;
-    sblk->root.attr.size = 0;
-    sblk->root.attr.n_blocks = 0;
-    sblk->root.name[0] = '\0';
-
-    advfs.superblock = sblk;
 
     return fuse_main(argc, argv, &advfs_oper, &advfs);
 }
