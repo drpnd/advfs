@@ -104,19 +104,74 @@ _block_add(advfs_t *advfs, uint64_t b)
 /*
  * Delete
  */
-static int
-_block_delete_rec(advfs_t *advfs, uint64_t parent, uint64_t b)
+static uint64_t
+_block_remove_max(advfs_t *advfs, uint64_t *parent)
 {
-    return -1;
+    advfs_block_mgt_t *mgt;
+    uint64_t maxc;
+
+    mgt = _get_block_mgt(advfs, *parent);
+    while ( 0 != mgt->right ) {
+        parent = &mgt->right;
+        mgt = _get_block_mgt(advfs, *parent);
+    }
+
+    maxc = *parent;
+    if ( 0 != mgt->left ) {
+        *parent = mgt->left;
+    }
+
+    return maxc;
+}
+static int
+_block_delete_rec(advfs_t *advfs, uint64_t *parent, uint64_t b)
+{
+    advfs_block_mgt_t *mgt;
+    advfs_block_mgt_t *tmp;
+    uint64_t maxc;
+    int ret;
+
+    if ( *parent == b ) {
+        /* Found, then pull one of the children of the  */
+        mgt = _get_block_mgt(advfs, b);
+        if ( 0 != mgt->left && 0 != mgt->right ) {
+            /* Both children */
+            maxc = _block_remove_max(advfs, &mgt->left);
+            *parent = maxc;
+            tmp = _get_block_mgt(advfs, maxc);
+            tmp->left = mgt->left;
+            tmp->right = mgt->right;
+        } else if ( 0 != mgt->left ) {
+            /* Only left child */
+            *parent = mgt->left;
+        } else if ( 0 != mgt->left ) {
+            *parent = mgt->right;
+        } else {
+            /* No children */
+            *parent = 0;
+        }
+
+        return 0;
+    } else {
+        mgt = _get_block_mgt(advfs, *parent);
+        tmp = _get_block_mgt(advfs, b);
+        ret = memcmp(mgt->hash, tmp->hash, sizeof(mgt->hash));
+        if ( ret < 0 ) {
+            /* Right */
+            return _block_delete_rec(advfs, &mgt->right, b);
+        } else if ( ret > 0 ) {
+            /* Left */
+            return _block_delete_rec(advfs, &mgt->left, b);
+        } else {
+            /* Found the hash but not the same block number */
+            return -1;
+        }
+    }
 }
 static int
 _block_delete(advfs_t *advfs, uint64_t b)
 {
-    uint64_t root;
-
-    root = advfs->superblock->block_mgt_root;
-
-    return _block_delete_rec(advfs, root, b);
+    return _block_delete_rec(advfs, &advfs->superblock->block_mgt_root, b);
 }
 
 /*
