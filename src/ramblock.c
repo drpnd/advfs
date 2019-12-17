@@ -87,18 +87,37 @@ _block_search(advfs_t *advfs, const unsigned char *hash)
  * Add
  */
 static int
-_block_add_rec(advfs_t *advfs, uint64_t parent, uint64_t b)
+_block_add_rec(advfs_t *advfs, uint64_t *parent, uint64_t b)
 {
-    return 0;
+    advfs_block_mgt_t *mgt;
+    advfs_block_mgt_t *tmp;
+    int ret;
+
+    if ( *parent == 0 ) {
+        *parent = b;
+        return 0;
+    }
+
+    mgt = _get_block_mgt(advfs, *parent);
+    tmp = _get_block_mgt(advfs, b);
+
+    /* Compare the hash value */
+    ret = memcmp(mgt->hash, tmp->hash, sizeof(mgt->hash));
+    if ( 0 == ret ) {
+        /* Hash value conflict */
+        return -1;
+    } else if ( ret < 0 ) {
+        /* Search right */
+        return _block_add_rec(advfs, &mgt->right, b);
+    } else {
+        /* Search left */
+        return _block_add_rec(advfs, &mgt->left, b);
+    }
 }
 static int
 _block_add(advfs_t *advfs, uint64_t b)
 {
-    uint64_t root;
-
-    root = advfs->superblock->block_mgt_root;
-
-    return _block_add_rec(advfs, root, b);
+    return _block_add_rec(advfs, &advfs->superblock->block_mgt_root, b);
 }
 
 /*
@@ -130,6 +149,11 @@ _block_delete_rec(advfs_t *advfs, uint64_t *parent, uint64_t b)
     advfs_block_mgt_t *tmp;
     uint64_t maxc;
     int ret;
+
+    if ( *parent == 0 ) {
+        /* Not found */
+        return -1;
+    }
 
     if ( *parent == b ) {
         /* Found, then pull one of the children of the  */
