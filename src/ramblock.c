@@ -233,7 +233,8 @@ advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
  * Write a block
  */
 int
-advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
+                  uint64_t *pos)
 {
     uint64_t b;
     uint64_t *block;
@@ -242,6 +243,28 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
 
     /* Calculate the hash value */
     SHA384(buf, ADVFS_BLOCK_SIZE, hash);
+
+    /* Check the duplication */
+    b = _block_search(advfs, hash);
+    if ( 0 != b ) {
+        /* Found, then update the position if changed */
+        if ( *pos != b ) {
+            if ( 0 != *pos ) {
+                /* Unreference */
+                mgt = _get_block_mgt(advfs, *pos);
+                mgt->ref--;
+            }
+            /* Update the new reference */
+            *pos = b;
+            mgt = _get_block_mgt(advfs, b);
+            mgt->ref++;
+        }
+        return 0;
+    }
+
+    /* No dupliation */
+#if 0
+
     mgt = _get_block_mgt(advfs, pos);
     memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
 
@@ -263,8 +286,9 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
     }
     block = _get_block(advfs, b);
     memcpy(block, buf, ADVFS_BLOCK_SIZE);
+#endif
 
-    return 0;
+    return -1;
 }
 
 /*
