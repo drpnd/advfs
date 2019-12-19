@@ -66,8 +66,8 @@ _get_block_mgt(advfs_t *advfs, uint64_t b)
 /*
  * Allocate a new block
  */
-static uint64_t
-_alloc_block(advfs_t *advfs)
+uint64_t
+advfs_alloc_block(advfs_t *advfs)
 {
     uint64_t b;
     advfs_free_list_t *fl;
@@ -87,8 +87,8 @@ _alloc_block(advfs_t *advfs)
 /*
  * Release a block
  */
-static void
-_free_block(advfs_t *advfs, uint64_t b)
+void
+advfs_free_block(advfs_t *advfs, uint64_t b)
 {
     advfs_free_list_t *fl;
 
@@ -136,7 +136,7 @@ _increase_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
         /* Next chain */
         if ( i == ADVFS_INODE_BLOCKPTR - 1 ) {
             if ( alloc ) {
-                b2 = _alloc_block(advfs);
+                b2 = advfs_alloc_block(advfs);
                 if ( 0 == b2 ) {
                     return -1;
                 }
@@ -148,7 +148,7 @@ _increase_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
             pos = 0;
         } else if ( pos == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             if ( alloc ) {
-                b2 = _alloc_block(advfs);
+                b2 = advfs_alloc_block(advfs);
                 if ( 0 == b2 ) {
                     return -1;
                 }
@@ -162,10 +162,10 @@ _increase_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
 
         if ( alloc ) {
             /* Allocate */
-            b1 = _alloc_block(advfs);
+            b1 = advfs_alloc_block(advfs);
             if ( 0 == b1 ) {
                 if ( 0 != b2 ) {
-                    _free_block(advfs, b2);
+                    advfs_free_block(advfs, b2);
                 }
                 return -1;
             }
@@ -200,7 +200,7 @@ _shrink_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
         /* Next chain */
         if ( i == ADVFS_INODE_BLOCKPTR - 1 ) {
             if ( 0 != fb ) {
-                _free_block(advfs, fb);
+                advfs_free_block(advfs, fb);
             }
             b = block[ADVFS_INODE_BLOCKPTR - 1];
             block = _get_block(advfs, b);
@@ -210,7 +210,7 @@ _shrink_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
             }
         } else if ( pos == (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             if ( 0 != fb ) {
-                _free_block(advfs, fb);
+                advfs_free_block(advfs, fb);
             }
             b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
             block = _get_block(advfs, b);
@@ -221,12 +221,12 @@ _shrink_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
         }
 
         if ( free ) {
-            _free_block(advfs, block[pos]);
+            advfs_free_block(advfs, block[pos]);
         }
         pos++;
     }
     if ( 0 != fb ) {
-        _free_block(advfs, fb);
+        advfs_free_block(advfs, fb);
     }
 
     e->attr.n_blocks = nb;

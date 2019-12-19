@@ -137,6 +137,10 @@ extern "C" {
     int advfs_read_block(advfs_t *, advfs_inode_t *, void *, uint64_t);
     int advfs_write_block(advfs_t *, advfs_inode_t *, void *, uint64_t *);
 
+    /* main.c */
+    uint64_t advfs_alloc_block(advfs_t *);
+    void advfs_free_block(advfs_t *, uint64_t);
+
 #ifdef __cplusplus
 }
 #endif

@@ -262,7 +262,39 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
         return 0;
     }
 
-    /* No dupliation */
+    /* No dupliation, then allocate a new block */
+    b = advfs_alloc_block(advfs);
+    mgt = _get_block_mgt(advfs, b);
+    mgt->ref = 1;
+    memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
+    *pos = b;
+
+    block = _get_block(advfs, b);
+    memcpy(block, buf, ADVFS_BLOCK_SIZE);
+
+#if 0
+    mgt = _get_block_mgt(advfs, pos);
+    memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
+
+    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        b = inode->blocks[pos];
+    } else {
+        /* Resolve from the chain */
+        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, b);
+        pos -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, b);
+            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        b = block[pos];
+    }
+    block = _get_block(advfs, b);
+    memcpy(block, buf, ADVFS_BLOCK_SIZE);
+#endif
 
     return -1;
 }
