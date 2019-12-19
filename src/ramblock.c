@@ -234,12 +234,31 @@ advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
  */
 int
 advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
-                  uint64_t *pos)
+                  uint64_t pos)
 {
     uint64_t b;
+    uint64_t *cur;
     uint64_t *block;
     unsigned char hash[SHA384_DIGEST_LENGTH];
     advfs_block_mgt_t *mgt;
+
+    /* Find the corresponding block */
+    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        cur = &inode->blocks[pos];
+    } else {
+        /* Resolve from the chain */
+        cur = &inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, *cur);
+        pos -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            cur = &block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, *cur);
+            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        cur = &block[pos];
+    }
 
     /* Calculate the hash value */
     SHA384(buf, ADVFS_BLOCK_SIZE, hash);
@@ -247,54 +266,50 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
     /* Check the duplication */
     b = _block_search(advfs, hash);
     if ( 0 != b ) {
-        /* Found, then update the position if changed */
-        if ( *pos != b ) {
-            if ( 0 != *pos ) {
-                /* Unreference */
-                mgt = _get_block_mgt(advfs, *pos);
+        /* Found */
+        if ( *cur != b ) {
+            /* Contents changed */
+            if ( 0 != *cur ) {
+                /* Release the old block */
+                mgt = _get_block_mgt(advfs, *cur);
                 mgt->ref--;
             }
             /* Update the new reference */
-            *pos = b;
             mgt = _get_block_mgt(advfs, b);
             mgt->ref++;
         }
+        *cur = b;
+        return 0;
+    } else {
+        /* Not found */
+        if ( 0 == *cur ) {
+            /* Allocate a new block */
+            b = advfs_alloc_block(advfs);
+            if ( 0 == b ){
+                return -1;
+            }
+            *cur = b;
+            mgt = _get_block_mgt(advfs, *cur);
+            mgt->ref = 1;
+        } else {
+            mgt = _get_block_mgt(advfs, *cur);
+            if ( mgt->ref > 1 ) {
+                /* Copy */
+                b = advfs_alloc_block(advfs);
+                if ( 0 == b ){
+                    return -1;
+                }
+                *cur = b;
+                mgt = _get_block_mgt(advfs, *cur);
+                mgt->ref = 1;
+            }
+        }
+
+        block = _get_block(advfs, *cur);
+        memcpy(block, buf, ADVFS_BLOCK_SIZE);
+
         return 0;
     }
-
-    /* No dupliation, then allocate a new block */
-    b = advfs_alloc_block(advfs);
-    mgt = _get_block_mgt(advfs, b);
-    mgt->ref = 1;
-    memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
-    *pos = b;
-
-    block = _get_block(advfs, b);
-    memcpy(block, buf, ADVFS_BLOCK_SIZE);
-
-#if 0
-    mgt = _get_block_mgt(advfs, pos);
-    memcpy(mgt->hash, hash, SHA384_DIGEST_LENGTH);
-
-    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
-        /* The block number is included in the inode structure */
-        b = inode->blocks[pos];
-    } else {
-        /* Resolve from the chain */
-        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
-        block = _get_block(advfs, b);
-        pos -= ADVFS_INODE_BLOCKPTR - 1;
-        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
-            /* Get the next chain */
-            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-            block = _get_block(advfs, b);
-            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
-        }
-        b = block[pos];
-    }
-    block = _get_block(advfs, b);
-    memcpy(block, buf, ADVFS_BLOCK_SIZE);
-#endif
 
     return -1;
 }
