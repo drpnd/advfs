@@ -58,6 +58,10 @@ _block_search_rec(advfs_t *advfs, uint64_t parent, const unsigned char *hash)
     int ret;
     advfs_block_mgt_t *mgt;
 
+    if ( 0 == parent ) {
+        return 0;
+    }
+
     mgt = _get_block_mgt(advfs, parent);
 
     /* Compare the hash value */
@@ -199,10 +203,10 @@ _block_delete(advfs_t *advfs, uint64_t b)
 }
 
 /*
- * Read a block
+ * Resolve the block number from the position
  */
-int
-advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+static uint64_t
+_resolve_block(advfs_t *advfs, advfs_inode_t *inode, uint64_t pos)
 {
     uint64_t b;
     uint64_t *block;
@@ -223,8 +227,53 @@ advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
         }
         b = block[pos];
     }
+
+    return b;
+}
+
+/*
+ * Read a raw block
+ */
+int
+advfs_read_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
+                     uint64_t pos)
+{
+    uint64_t b;
+    uint64_t *block;
+
+    b = _resolve_block(advfs, inode, pos);
     block = _get_block(advfs, b);
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
+
+    return 0;
+}
+
+/*
+ * Write a raw block
+ */
+int
+advfs_write_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
+                      uint64_t pos)
+{
+    return 0;
+}
+
+/*
+ * Read a block
+ */
+int
+advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+{
+    uint64_t b;
+    uint64_t *block;
+
+    b = _resolve_block(advfs, inode, pos);
+    if ( 0 == b ) {
+        memset(buf, 0, ADVFS_BLOCK_SIZE);
+    } else {
+        block = _get_block(advfs, b);
+        memcpy(buf, block, ADVFS_BLOCK_SIZE);
+    }
 
     return 0;
 }
@@ -279,6 +328,7 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
             mgt->ref++;
         }
         *cur = b;
+
         return 0;
     } else {
         /* Not found */
@@ -302,16 +352,20 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
                 *cur = b;
                 mgt = _get_block_mgt(advfs, *cur);
                 mgt->ref = 1;
+            } else {
+                /* Remove the block */
+                _block_delete(advfs, *cur);
             }
         }
 
         block = _get_block(advfs, *cur);
         memcpy(block, buf, ADVFS_BLOCK_SIZE);
 
+        /* Add the block */
+        _block_add(advfs, *cur);
+
         return 0;
     }
-
-    return -1;
 }
 
 /*
