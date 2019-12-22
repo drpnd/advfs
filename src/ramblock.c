@@ -205,27 +205,27 @@ _block_delete(advfs_t *advfs, uint64_t b)
 /*
  * Resolve the block number from the position
  */
-static uint64_t
+static uint64_t *
 _resolve_block(advfs_t *advfs, advfs_inode_t *inode, uint64_t pos)
 {
-    uint64_t b;
+    uint64_t *b;
     uint64_t *block;
 
     if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
-        b = inode->blocks[pos];
+        b = &inode->blocks[pos];
     } else {
         /* Resolve from the chain */
-        b = inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
-        block = _get_block(advfs, b);
+        b = &inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
+        block = _get_block(advfs, *b);
         pos -= ADVFS_INODE_BLOCKPTR - 1;
         while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             /* Get the next chain */
-            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-            block = _get_block(advfs, b);
+            b = &block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            block = _get_block(advfs, *b);
             pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
         }
-        b = block[pos];
+        b = &block[pos];
     }
 
     return b;
@@ -238,11 +238,11 @@ int
 advfs_read_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
                      uint64_t pos)
 {
-    uint64_t b;
+    uint64_t *b;
     uint64_t *block;
 
     b = _resolve_block(advfs, inode, pos);
-    block = _get_block(advfs, b);
+    block = _get_block(advfs, *b);
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
 
     return 0;
@@ -255,6 +255,13 @@ int
 advfs_write_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
                       uint64_t pos)
 {
+    uint64_t *b;
+    uint64_t *block;
+
+    b = _resolve_block(advfs, inode, pos);
+    block = _get_block(advfs, *b);
+    memcpy(block, buf, ADVFS_BLOCK_SIZE);
+
     return 0;
 }
 
@@ -264,14 +271,14 @@ advfs_write_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
 int
 advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
 {
-    uint64_t b;
+    uint64_t *b;
     uint64_t *block;
 
     b = _resolve_block(advfs, inode, pos);
-    if ( 0 == b ) {
+    if ( 0 == *b ) {
         memset(buf, 0, ADVFS_BLOCK_SIZE);
     } else {
-        block = _get_block(advfs, b);
+        block = _get_block(advfs, *b);
         memcpy(buf, block, ADVFS_BLOCK_SIZE);
     }
 
@@ -292,22 +299,7 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
     advfs_block_mgt_t *mgt;
 
     /* Find the corresponding block */
-    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
-        /* The block number is included in the inode structure */
-        cur = &inode->blocks[pos];
-    } else {
-        /* Resolve from the chain */
-        cur = &inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
-        block = _get_block(advfs, *cur);
-        pos -= ADVFS_INODE_BLOCKPTR - 1;
-        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
-            /* Get the next chain */
-            cur = &block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-            block = _get_block(advfs, *cur);
-            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
-        }
-        cur = &block[pos];
-    }
+    cur = _resolve_block(advfs, inode, pos);
 
     /* Calculate the hash value */
     SHA384(buf, ADVFS_BLOCK_SIZE, hash);
