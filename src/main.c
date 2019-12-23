@@ -56,15 +56,29 @@ advfs_alloc_block(advfs_t *advfs)
 {
     uint64_t b;
     advfs_free_list_t *fl;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
 
-    b = advfs->superblock->freelist;
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Read the first entry of the freelist */
+    b = sb.freelist;
     if ( 0 == b ) {
+        /* No entry remaining */
         return 0;
     }
-    fl = _get_block(advfs, b);
-    advfs->superblock->freelist = fl->next;
 
-    advfs->superblock->n_block_used++;
+    /* Read from the free block */
+    advfs_read_raw_block(advfs, buf, b);
+    fl = (advfs_free_list_t *)buf;
+
+    /* Update the superblock */
+    sb.freelist = fl->next;
+    sb.n_block_used++;
+
+    /* Write back the super block */
+    advfs_write_superblock(advfs, &sb);
 
     return b;
 }
@@ -76,12 +90,22 @@ void
 advfs_free_block(advfs_t *advfs, uint64_t b)
 {
     advfs_free_list_t *fl;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
 
-    fl = _get_block(advfs, b);
-    fl->next = advfs->superblock->freelist;
-    advfs->superblock->freelist = b;
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
 
-    advfs->superblock->n_block_used--;
+    fl = (advfs_free_list_t *)buf;
+    fl->next = sb.freelist;
+    advfs_write_raw_block(advfs, buf, b);
+
+    /* Update the superblock */
+    sb.freelist = b;
+    sb.n_block_used--;
+
+    /* Write back the superblock */
+    advfs_write_superblock(advfs, &sb);
 }
 
 /*

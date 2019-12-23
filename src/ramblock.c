@@ -232,17 +232,37 @@ _resolve_block(advfs_t *advfs, advfs_inode_t *inode, uint64_t pos)
 }
 
 /*
+ * Read the superblock
+ */
+int
+advfs_read_superblock(advfs_t *advfs, advfs_superblock_t *sb)
+{
+    memcpy(sb, advfs->superblock, sizeof(advfs_superblock_t));
+
+    return 0;
+}
+
+/*
+ * Write back the superblock
+ */
+int
+advfs_write_superblock(advfs_t *advfs, advfs_superblock_t *sb)
+{
+    memcpy(advfs->superblock, sb, sizeof(advfs_superblock_t));
+
+    return 0;
+}
+
+
+/*
  * Read a raw block
  */
 int
-advfs_read_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
-                     uint64_t pos)
+advfs_read_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
-    uint64_t *b;
     uint64_t *block;
 
-    b = _resolve_block(advfs, inode, pos);
-    block = _get_block(advfs, *b);
+    block = _get_block(advfs, pos);
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
 
     return 0;
@@ -252,14 +272,11 @@ advfs_read_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
  * Write a raw block
  */
 int
-advfs_write_raw_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
-                      uint64_t pos)
+advfs_write_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
-    uint64_t *b;
     uint64_t *block;
 
-    b = _resolve_block(advfs, inode, pos);
-    block = _get_block(advfs, *b);
+    block = _get_block(advfs, pos);
     memcpy(block, buf, ADVFS_BLOCK_SIZE);
 
     return 0;

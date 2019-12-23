@@ -134,6 +134,10 @@ extern "C" {
     int advfs_init(advfs_t *);
 
     /* ramblock.c */
+    int advfs_read_superblock(advfs_t *, advfs_superblock_t *);
+    int advfs_write_superblock(advfs_t *, advfs_superblock_t *);
+    int advfs_read_raw_block(advfs_t *, void *, uint64_t);
+    int advfs_write_raw_block(advfs_t *, void *, uint64_t);
     int advfs_read_block(advfs_t *, advfs_inode_t *, void *, uint64_t);
     int advfs_write_block(advfs_t *, advfs_inode_t *, void *, uint64_t);
 
