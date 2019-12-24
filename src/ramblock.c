@@ -441,7 +441,7 @@ advfs_free_block(advfs_t *advfs, uint64_t b)
 }
 
 /*
- * Read inode
+ * Read an inode
  */
 int
 advfs_read_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
@@ -471,10 +471,10 @@ advfs_read_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
 }
 
 /*
- * Write inode
+ * Write an inode
  */
 int
-advfs_write_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
+advfs_write_inode(advfs_t *advfs, const advfs_inode_t *inode, uint64_t nr)
 {
     void *ptr;
     uint64_t b;
@@ -496,6 +496,69 @@ advfs_write_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
     advfs_read_raw_block(advfs, buf, b);
     ptr = buf + off;
     memcpy(ptr, inode, sizeof(advfs_inode_t));
+
+    /* Write back */
+    advfs_write_raw_block(advfs, buf, b);
+
+    return 0;
+}
+
+/*
+ * Read a management block
+ */
+int
+advfs_read_block_mgt(advfs_t *advfs, advfs_block_mgt_t *mgt, uint64_t nr)
+{
+    void *ptr;
+    uint64_t b;
+    uint64_t off;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Resolve the position */
+    b = sb.ptr_block_mgt + (sizeof(advfs_block_mgt_t) * nr) / ADVFS_BLOCK_SIZE;
+    off = (sizeof(advfs_block_mgt_t) * nr) % ADVFS_BLOCK_SIZE;
+
+    /* Assert the size to prevent buffer overflow */
+    assert( off + sizeof(advfs_block_mgt_t) <= ADVFS_BLOCK_SIZE );
+
+    /* Read the block */
+    advfs_read_raw_block(advfs, buf, b);
+    ptr = buf + off;
+    memcpy(mgt, ptr, sizeof(advfs_block_mgt_t));
+
+    return 0;
+}
+
+/*
+ * Write a management block
+ */
+int
+advfs_write_block_mgt(advfs_t *advfs, const advfs_block_mgt_t *mgt, uint64_t nr)
+{
+    void *ptr;
+    uint64_t b;
+    uint64_t off;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Resolve the position */
+    b = sb.ptr_block_mgt + (sizeof(advfs_block_mgt_t) * nr) / ADVFS_BLOCK_SIZE;
+    off = (sizeof(advfs_block_mgt_t) * nr) % ADVFS_BLOCK_SIZE;
+
+    /* Assert the size to prevent buffer overflow */
+    assert( off + sizeof(advfs_block_mgt_t) <= ADVFS_BLOCK_SIZE );
+
+    /* Read the block */
+    advfs_read_raw_block(advfs, buf, b);
+    ptr = buf + off;
+    memcpy(ptr, mgt, sizeof(advfs_block_mgt_t));
 
     /* Write back */
     advfs_write_raw_block(advfs, buf, b);
