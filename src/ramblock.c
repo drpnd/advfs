@@ -206,31 +206,81 @@ _block_delete(advfs_t *advfs, uint64_t b)
 /*
  * Resolve the block number from the position
  */
-static uint64_t *
-_resolve_block(advfs_t *advfs, advfs_inode_t *inode, uint64_t pos)
+static uint64_t
+_resolve_block_map(advfs_t *advfs, uint64_t inr, uint64_t pos)
 {
-    uint64_t *b;
+    uint64_t b;
     uint64_t *block;
+    advfs_inode_t inode;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the inode */
+    advfs_read_inode(advfs, &inode, inr);
 
     if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
         /* The block number is included in the inode structure */
-        b = &inode->blocks[pos];
+        b = inode.blocks[pos];
     } else {
         /* Resolve from the chain */
-        b = &inode->blocks[ADVFS_INODE_BLOCKPTR - 1];
-        block = _get_block(advfs, *b);
+        b = inode.blocks[ADVFS_INODE_BLOCKPTR - 1];
+        advfs_read_raw_block(advfs, buf, b);
+        block = (uint64_t *)buf;
         pos -= ADVFS_INODE_BLOCKPTR - 1;
         while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
             /* Get the next chain */
-            b = &block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
-            block = _get_block(advfs, *b);
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            advfs_read_raw_block(advfs, buf, b);
+            block = (uint64_t *)buf;
             pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
         }
-        b = &block[pos];
+        b = block[pos];
     }
 
     return b;
 }
+
+/*
+ * Update the mapping of a logical block number to a physical block number
+ */
+static int
+_update_block_map(advfs_t *advfs, uint64_t inr, uint64_t pos, uint64_t pb)
+{
+    uint64_t b;
+    uint64_t *block;
+    advfs_inode_t inode;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the inode */
+    advfs_read_inode(advfs, &inode, inr);
+
+    if ( pos < ADVFS_INODE_BLOCKPTR - 1 ) {
+        /* The block number is included in the inode structure */
+        inode.blocks[pos] = pb;
+
+        /* Write back */
+        advfs_write_inode(advfs, &inode, inr);
+    } else {
+        /* Resolve from the chain */
+        b = inode.blocks[ADVFS_INODE_BLOCKPTR - 1];
+        advfs_read_raw_block(advfs, buf, b);
+        block = (uint64_t *)buf;
+        pos -= ADVFS_INODE_BLOCKPTR - 1;
+        while ( pos >= (ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1) ) {
+            /* Get the next chain */
+            b = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+            advfs_read_raw_block(advfs, buf, b);
+            block = (uint64_t *)buf;
+            pos -= ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1;
+        }
+        block[pos] = pb;
+
+        /* Write back */
+        advfs_write_raw_block(advfs, buf, b);
+    }
+
+    return 0;
+}
+
 
 /*
  * Read the superblock
@@ -378,6 +428,73 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
 
         return 0;
     }
+}
+
+int
+advfs_write_block2(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
+{
+    uint64_t b;
+    uint64_t cur;
+    uint64_t *block;
+    unsigned char hash[SHA384_DIGEST_LENGTH];
+    advfs_block_mgt_t mgt;
+    advfs_inode_t inode;
+
+    /* Read the inode corresponding to inr */
+    advfs_read_inode(advfs, &inode, inr);
+
+    /* Calculate the hash value */
+    SHA384(buf, ADVFS_BLOCK_SIZE, hash);
+
+    /* Resolve the physical block corresponding to the logical block */
+    cur = _resolve_block_map(advfs, inr, pos);
+
+    /* Check the duplication */
+    b = _block_search(advfs, hash);
+    if ( b != 0 ) {
+        /* Found */
+        if ( cur != b ) {
+            if ( cur != 0 ) {
+                /* Unreference the old block */
+                advfs_read_block_mgt(advfs, &mgt, cur);
+                mgt.ref--;
+                advfs_write_block_mgt(advfs, &mgt, cur);
+                if ( mgt.ref == 0 ) {
+                    /* Release this block */
+                    _block_delete(advfs, cur);
+                    advfs_free_block(advfs, cur);
+                }
+            }
+            /* Referencde the new block */
+            advfs_read_block_mgt(advfs, &mgt, b);
+            mgt.ref++;
+            advfs_write_block_mgt(advfs, &mgt, b);
+        }
+    } else {
+        /* Not found, then allocate a new block, then write the content */
+        b = advfs_alloc_block(advfs);
+        advfs_write_raw_block(advfs, buf, b);
+        memcpy(mgt.hash, hash, sizeof(mgt.hash));
+        mgt.ref = 1;
+        mgt.left = 0;
+        mgt.right = 0;
+        /* Add to the tree */
+        _block_add(advfs, b);
+
+        if ( cur != 0 ) {
+            /* Unreference and free if needed */
+            advfs_read_block_mgt(advfs, &mgt, cur);
+            mgt.ref--;
+            advfs_write_block_mgt(advfs, &mgt, cur);
+            if ( mgt.ref == 0 ) {
+                /* Release this block */
+                _block_delete(advfs, cur);
+                advfs_free_block(advfs, cur);
+            }
+        }
+    }
+
+    return 0;
 }
 
 /*
