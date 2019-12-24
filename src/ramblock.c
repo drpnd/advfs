@@ -24,6 +24,7 @@
 #include "advfs.h"
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 /*
  * Resolve the block corresponding to the block number b
@@ -253,7 +254,6 @@ advfs_write_superblock(advfs_t *advfs, advfs_superblock_t *sb)
     return 0;
 }
 
-
 /*
  * Read a raw block
  */
@@ -352,7 +352,11 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
             mgt->ref = 1;
         } else {
             mgt = _get_block_mgt(advfs, *cur);
+            assert(mgt->ref >= 1);
             if ( mgt->ref > 1 ) {
+                /* Decrement the reference */
+                mgt->ref--;
+
                 /* Copy */
                 b = advfs_alloc_block(advfs);
                 if ( 0 == b ){
@@ -362,8 +366,7 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
                 mgt = _get_block_mgt(advfs, *cur);
                 mgt->ref = 1;
             } else {
-                /* Remove the block */
-                _block_delete(advfs, *cur);
+                /* Update the block of *cur */
             }
         }
 
@@ -376,6 +379,41 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
         return 0;
     }
 }
+
+/*
+ * Read inode
+ */
+int
+advfs_read_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
+{
+    void *ptr;
+
+    /* Read the offset */
+    ptr = (void *)advfs->superblock
+        + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode
+        + sizeof(advfs_inode_t) * nr;
+    memcpy(inode, ptr, sizeof(advfs_inode_t));
+
+    return 0;
+}
+
+/*
+ * Write inode
+ */
+int
+advfs_write_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
+{
+    void *ptr;
+
+    /* Read the offset */
+    ptr = (void *)advfs->superblock
+        + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode
+        + sizeof(advfs_inode_t) * nr;
+    memcpy(ptr, inode, sizeof(advfs_inode_t));
+
+    return 0;
+}
+
 
 /*
  * Local variables:

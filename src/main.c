@@ -131,6 +131,7 @@ _increase_block(advfs_t *advfs, advfs_inode_t *e, uint64_t nb)
 {
     uint64_t b2;
     uint64_t pos;
+    //uint8_t buf[ADVFS_BLOCK_SIZE];
     uint64_t *block;
     ssize_t i;
     int alloc;
@@ -278,7 +279,6 @@ static int
 _set_inode_in_dir(advfs_t *advfs, advfs_inode_t *dir, uint64_t inode)
 {
     uint64_t nb;
-    uint64_t b;
     uint64_t idx;
     uint64_t *block;
     uint64_t bidx;
@@ -316,11 +316,11 @@ static int
 _find_free_inode(advfs_t *advfs, uint64_t *nr)
 {
     ssize_t i;
-    advfs_inode_t *inode;
+    advfs_inode_t inode;
 
     for ( i = 0; i < ADVFS_NUM_ENTRIES; i++ ) {
-        inode = _get_inode(advfs, i);
-        if ( inode->attr.type == ADVFS_UNUSED ) {
+        advfs_read_inode(advfs, &inode, i);
+        if ( inode.attr.type == ADVFS_UNUSED ) {
             *nr = i;
             return 0;
         }
