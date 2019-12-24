@@ -435,7 +435,6 @@ advfs_write_block2(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
 {
     uint64_t b;
     uint64_t cur;
-    uint64_t *block;
     unsigned char hash[SHA384_DIGEST_LENGTH];
     advfs_block_mgt_t mgt;
     advfs_inode_t inode;
