@@ -49,66 +49,6 @@ _get_block(advfs_t *advfs, uint64_t b)
 }
 
 /*
- * Allocate a new block
- */
-uint64_t
-advfs_alloc_block(advfs_t *advfs)
-{
-    uint64_t b;
-    advfs_free_list_t *fl;
-    advfs_superblock_t sb;
-    uint8_t buf[ADVFS_BLOCK_SIZE];
-
-    /* Read the superblock */
-    advfs_read_superblock(advfs, &sb);
-
-    /* Read the first entry of the freelist */
-    b = sb.freelist;
-    if ( 0 == b ) {
-        /* No entry remaining */
-        return 0;
-    }
-
-    /* Read from the free block */
-    advfs_read_raw_block(advfs, buf, b);
-    fl = (advfs_free_list_t *)buf;
-
-    /* Update the superblock */
-    sb.freelist = fl->next;
-    sb.n_block_used++;
-
-    /* Write back the super block */
-    advfs_write_superblock(advfs, &sb);
-
-    return b;
-}
-
-/*
- * Release a block
- */
-void
-advfs_free_block(advfs_t *advfs, uint64_t b)
-{
-    advfs_free_list_t *fl;
-    advfs_superblock_t sb;
-    uint8_t buf[ADVFS_BLOCK_SIZE];
-
-    /* Read the superblock */
-    advfs_read_superblock(advfs, &sb);
-
-    fl = (advfs_free_list_t *)buf;
-    fl->next = sb.freelist;
-    advfs_write_raw_block(advfs, buf, b);
-
-    /* Update the superblock */
-    sb.freelist = b;
-    sb.n_block_used--;
-
-    /* Write back the superblock */
-    advfs_write_superblock(advfs, &sb);
-}
-
-/*
  * Get the inode corresponding to the inode number nr
  */
 static advfs_inode_t *

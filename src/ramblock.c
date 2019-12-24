@@ -381,17 +381,90 @@ advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
 }
 
 /*
+ * Allocate a new block
+ */
+uint64_t
+advfs_alloc_block(advfs_t *advfs)
+{
+    uint64_t b;
+    advfs_free_list_t *fl;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Read the first entry of the freelist */
+    b = sb.freelist;
+    if ( 0 == b ) {
+        /* No entry remaining */
+        return 0;
+    }
+
+    /* Read from the free block */
+    advfs_read_raw_block(advfs, buf, b);
+    fl = (advfs_free_list_t *)buf;
+
+    /* Update the superblock */
+    sb.freelist = fl->next;
+    sb.n_block_used++;
+
+    /* Write back the super block */
+    advfs_write_superblock(advfs, &sb);
+
+    return b;
+}
+
+/*
+ * Release a block
+ */
+void
+advfs_free_block(advfs_t *advfs, uint64_t b)
+{
+    advfs_free_list_t *fl;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
+
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    fl = (advfs_free_list_t *)buf;
+    fl->next = sb.freelist;
+    advfs_write_raw_block(advfs, buf, b);
+
+    /* Update the superblock */
+    sb.freelist = b;
+    sb.n_block_used--;
+
+    /* Write back the superblock */
+    advfs_write_superblock(advfs, &sb);
+}
+
+/*
  * Read inode
  */
 int
 advfs_read_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
 {
     void *ptr;
+    uint64_t b;
+    uint64_t off;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
 
-    /* Read the offset */
-    ptr = (void *)advfs->superblock
-        + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode
-        + sizeof(advfs_inode_t) * nr;
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Resolve the position */
+    b = sb.ptr_inode + (sizeof(advfs_inode_t) * nr) / ADVFS_BLOCK_SIZE;
+    off = (sizeof(advfs_inode_t) * nr) % ADVFS_BLOCK_SIZE;
+
+    /* Assert the size to prevent buffer overflow */
+    assert( off + sizeof(advfs_inode_t) <= ADVFS_BLOCK_SIZE );
+
+    /* Read the block */
+    advfs_read_raw_block(advfs, buf, b);
+    ptr = buf + off;
     memcpy(inode, ptr, sizeof(advfs_inode_t));
 
     return 0;
@@ -404,16 +477,31 @@ int
 advfs_write_inode(advfs_t *advfs, advfs_inode_t *inode, uint64_t nr)
 {
     void *ptr;
+    uint64_t b;
+    uint64_t off;
+    advfs_superblock_t sb;
+    uint8_t buf[ADVFS_BLOCK_SIZE];
 
-    /* Read the offset */
-    ptr = (void *)advfs->superblock
-        + ADVFS_BLOCK_SIZE * advfs->superblock->ptr_inode
-        + sizeof(advfs_inode_t) * nr;
+    /* Read the superblock */
+    advfs_read_superblock(advfs, &sb);
+
+    /* Resolve the position */
+    b = sb.ptr_inode + (sizeof(advfs_inode_t) * nr) / ADVFS_BLOCK_SIZE;
+    off = (sizeof(advfs_inode_t) * nr) % ADVFS_BLOCK_SIZE;
+
+    /* Assert the size to prevent buffer overflow */
+    assert( off + sizeof(advfs_inode_t) <= ADVFS_BLOCK_SIZE );
+
+    /* Read the block */
+    advfs_read_raw_block(advfs, buf, b);
+    ptr = buf + off;
     memcpy(ptr, inode, sizeof(advfs_inode_t));
+
+    /* Write back */
+    advfs_write_raw_block(advfs, buf, b);
 
     return 0;
 }
-
 
 /*
  * Local variables:
