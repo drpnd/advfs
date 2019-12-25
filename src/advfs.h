@@ -116,7 +116,7 @@ typedef struct {
     uint64_t n_block_used;
     uint64_t freelist;
     /* Root inode */
-    advfs_inode_t root;
+    uint64_t root;
 } __attribute__ ((packed, aligned(ADVFS_BLOCK_SIZE))) advfs_superblock_t;
 
 /*
@@ -138,8 +138,9 @@ extern "C" {
     int advfs_write_superblock(advfs_t *, advfs_superblock_t *);
     int advfs_read_raw_block(advfs_t *, void *, uint64_t);
     int advfs_write_raw_block(advfs_t *, void *, uint64_t);
-    int advfs_read_block(advfs_t *, advfs_inode_t *, void *, uint64_t);
-    int advfs_write_block(advfs_t *, advfs_inode_t *, void *, uint64_t);
+    int advfs_read_block(advfs_t *, uint64_t, void *, uint64_t);
+    int advfs_write_block(advfs_t *, uint64_t, void *, uint64_t);
+    int advfs_unref_block(advfs_t *, uint64_t, uint64_t);
     uint64_t advfs_alloc_block(advfs_t *);
     void advfs_free_block(advfs_t *, uint64_t);
     int advfs_read_inode(advfs_t *, advfs_inode_t *, uint64_t);

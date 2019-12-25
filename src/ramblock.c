@@ -336,17 +336,18 @@ advfs_write_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
  * Read a block
  */
 int
-advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
+advfs_read_block(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
 {
-    uint64_t *b;
-    uint64_t *block;
+    uint64_t b;
 
-    b = _resolve_block(advfs, inode, pos);
-    if ( 0 == *b ) {
+    b = _resolve_block_map(advfs, inr, pos);
+    if ( b == 0 ) {
+        //printf("OOO %llx %llx %llx\n", inr, pos, b);
         memset(buf, 0, ADVFS_BLOCK_SIZE);
     } else {
-        block = _get_block(advfs, *b);
-        memcpy(buf, block, ADVFS_BLOCK_SIZE);
+        //printf("ooo %llx %llx %llx\n", inr, pos, b);
+        advfs_read_raw_block(advfs, buf, b);
+        //printf("yyyy %llx\n", *(uint64_t *)buf);
     }
 
     return 0;
@@ -356,82 +357,7 @@ advfs_read_block(advfs_t *advfs, advfs_inode_t *inode, void *buf, uint64_t pos)
  * Write a block
  */
 int
-advfs_write_block(advfs_t *advfs, advfs_inode_t *inode, void *buf,
-                  uint64_t pos)
-{
-    uint64_t b;
-    uint64_t *cur;
-    uint64_t *block;
-    unsigned char hash[SHA384_DIGEST_LENGTH];
-    advfs_block_mgt_t *mgt;
-
-    /* Find the corresponding block */
-    cur = _resolve_block(advfs, inode, pos);
-
-    /* Calculate the hash value */
-    SHA384(buf, ADVFS_BLOCK_SIZE, hash);
-
-    /* Check the duplication */
-    b = _block_search(advfs, hash);
-    if ( 0 != b ) {
-        /* Found */
-        if ( *cur != b ) {
-            /* Contents changed */
-            if ( 0 != *cur ) {
-                /* Release the old block */
-                mgt = _get_block_mgt(advfs, *cur);
-                mgt->ref--;
-            }
-            /* Update the new reference */
-            mgt = _get_block_mgt(advfs, b);
-            mgt->ref++;
-        }
-        *cur = b;
-
-        return 0;
-    } else {
-        /* Not found */
-        if ( 0 == *cur ) {
-            /* Allocate a new block */
-            b = advfs_alloc_block(advfs);
-            if ( 0 == b ){
-                return -1;
-            }
-            *cur = b;
-            mgt = _get_block_mgt(advfs, *cur);
-            mgt->ref = 1;
-        } else {
-            mgt = _get_block_mgt(advfs, *cur);
-            assert(mgt->ref >= 1);
-            if ( mgt->ref > 1 ) {
-                /* Decrement the reference */
-                mgt->ref--;
-
-                /* Copy */
-                b = advfs_alloc_block(advfs);
-                if ( 0 == b ){
-                    return -1;
-                }
-                *cur = b;
-                mgt = _get_block_mgt(advfs, *cur);
-                mgt->ref = 1;
-            } else {
-                /* Update the block of *cur */
-            }
-        }
-
-        block = _get_block(advfs, *cur);
-        memcpy(block, buf, ADVFS_BLOCK_SIZE);
-
-        /* Add the block */
-        _block_add(advfs, *cur);
-
-        return 0;
-    }
-}
-
-int
-advfs_write_block2(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
+advfs_write_block(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
 {
     uint64_t b;
     uint64_t cur;
@@ -480,6 +406,7 @@ advfs_write_block2(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
         /* Add to the tree */
         _block_add(advfs, b);
 
+        //printf("www %llx %llx\n", b, cur);
         if ( cur != 0 ) {
             /* Unreference and free if needed */
             advfs_read_block_mgt(advfs, &mgt, cur);
@@ -490,6 +417,45 @@ advfs_write_block2(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
                 _block_delete(advfs, cur);
                 advfs_free_block(advfs, cur);
             }
+        }
+
+        /* Update the block map */
+        _update_block_map(advfs, inr, pos, b);
+
+        uint64_t x = _resolve_block_map(advfs, inr, pos);
+        uint64_t buf2[ADVFS_BLOCK_SIZE / 8];
+        advfs_read_raw_block(advfs, buf2, b);
+        //printf("mmm %llx %llx %x\n", b, x, buf2[0]);
+    }
+
+    return 0;
+}
+
+
+/*
+ * Unreference the corresponding block
+ */
+int
+advfs_unref_block(advfs_t *advfs, uint64_t inr, uint64_t pos)
+{
+    uint64_t cur;
+    advfs_block_mgt_t mgt;
+    advfs_inode_t inode;
+
+    /* Read the inode corresponding to inr */
+    advfs_read_inode(advfs, &inode, inr);
+
+    /* Resolve the physical block corresponding to the logical block */
+    cur = _resolve_block_map(advfs, inr, pos);
+
+    if ( cur != 0 ) {
+        advfs_read_block_mgt(advfs, &mgt, cur);
+        mgt.ref--;
+        advfs_write_block_mgt(advfs, &mgt, cur);
+        if ( mgt.ref == 0 ) {
+            /* Release this block */
+            _block_delete(advfs, cur);
+            advfs_free_block(advfs, cur);
         }
     }
 
@@ -681,6 +647,7 @@ advfs_write_block_mgt(advfs_t *advfs, const advfs_block_mgt_t *mgt, uint64_t nr)
 
     return 0;
 }
+
 
 /*
  * Local variables:

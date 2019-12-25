@@ -95,14 +95,15 @@ advfs_init(advfs_t *advfs)
 
     /* Initialize the root inode */
     gettimeofday(&tv, NULL);
-    sblk->root.attr.type = ADVFS_DIR;
-    sblk->root.attr.mode = S_IFDIR | 0777;
-    sblk->root.attr.atime = tv.tv_sec;
-    sblk->root.attr.mtime = tv.tv_sec;
-    sblk->root.attr.ctime = tv.tv_sec;
-    sblk->root.attr.size = 0;
-    sblk->root.attr.n_blocks = 0;
-    sblk->root.name[0] = '\0';
+    sblk->root = 0;
+    inode[sblk->root].attr.type = ADVFS_DIR;
+    inode[sblk->root].attr.mode = S_IFDIR | 0777;
+    inode[sblk->root].attr.atime = tv.tv_sec;
+    inode[sblk->root].attr.mtime = tv.tv_sec;
+    inode[sblk->root].attr.ctime = tv.tv_sec;
+    inode[sblk->root].attr.size = 0;
+    inode[sblk->root].attr.n_blocks = 0;
+    inode[sblk->root].name[0] = '\0';
 
     advfs->superblock = sblk;
 
