@@ -342,12 +342,9 @@ advfs_read_block(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
 
     b = _resolve_block_map(advfs, inr, pos);
     if ( b == 0 ) {
-        //printf("OOO %llx %llx %llx\n", inr, pos, b);
         memset(buf, 0, ADVFS_BLOCK_SIZE);
     } else {
-        //printf("ooo %llx %llx %llx\n", inr, pos, b);
         advfs_read_raw_block(advfs, buf, b);
-        //printf("yyyy %llx\n", *(uint64_t *)buf);
     }
 
     return 0;
@@ -406,7 +403,6 @@ advfs_write_block(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
         /* Add to the tree */
         _block_add(advfs, b);
 
-        //printf("www %llx %llx\n", b, cur);
         if ( cur != 0 ) {
             /* Unreference and free if needed */
             advfs_read_block_mgt(advfs, &mgt, cur);
@@ -421,11 +417,6 @@ advfs_write_block(advfs_t *advfs, uint64_t inr, void *buf, uint64_t pos)
 
         /* Update the block map */
         _update_block_map(advfs, inr, pos, b);
-
-        uint64_t x = _resolve_block_map(advfs, inr, pos);
-        uint64_t buf2[ADVFS_BLOCK_SIZE / 8];
-        advfs_read_raw_block(advfs, buf2, b);
-        //printf("mmm %llx %llx %x\n", b, x, buf2[0]);
     }
 
     return 0;

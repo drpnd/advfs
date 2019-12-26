@@ -39,30 +39,6 @@
 static int _path2inode_rec(advfs_t *, uint64_t *, uint64_t, const char *, int);
 
 /*
- * Resolve the block corresponding to the block number b
- */
-static void *
-_get_block(advfs_t *advfs, uint64_t b)
-{
-    return (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
-}
-
-/*
- * Get the inode corresponding to the inode number nr
- */
-static advfs_inode_t *
-_get_inode(advfs_t *advfs, uint64_t nr)
-{
-    uint64_t b;
-    advfs_inode_t *inodes;
-
-    b = advfs->superblock->ptr_inode;
-    inodes = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
-
-    return &inodes[nr];
-}
-
-/*
  * Increase the block
  */
 static int
@@ -131,6 +107,7 @@ _increase_block(advfs_t *advfs, uint64_t inr, uint64_t nb)
     if ( b2 != 0 ) {
         advfs_write_raw_block(advfs, buf, b2);
     }
+    e.attr.n_blocks = nb;
     advfs_write_inode(advfs, &e, inr);
 
     return 0;
@@ -283,9 +260,7 @@ _set_inode_in_dir(advfs_t *advfs, uint64_t inr, uint64_t inode)
 
     advfs_read_block(advfs, inr, buf, bidx);
     block = (uint64_t *)buf;
-    //printf("> %lld %x %llx %llx\n", idx, buf[0], block[0], block[1]);
     block[idx] = inode;
-    //printf(">> %lld %llx %llx\n", idx, block[0], block[1]);
     advfs_write_block(advfs, inr, buf, bidx);
 
     advfs_read_inode(advfs, &dir, inr);
