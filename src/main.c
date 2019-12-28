@@ -579,6 +579,10 @@ advfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     uint64_t inr2;
     int ret;
 
+    /* Ignore */
+    (void)offset;
+    (void)fi;
+
     /* Get the context */
     ctx = fuse_get_context();
     advfs = ctx->private_data;

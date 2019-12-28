@@ -639,7 +639,6 @@ advfs_write_block_mgt(advfs_t *advfs, const advfs_block_mgt_t *mgt, uint64_t nr)
     return 0;
 }
 
-
 /*
  * Local variables:
  * tab-width: 4
