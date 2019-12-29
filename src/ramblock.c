@@ -27,15 +27,6 @@
 #include <assert.h>
 
 /*
- * Resolve the block corresponding to the block number b
- */
-static void *
-_get_block(advfs_t *advfs, uint64_t b)
-{
-    return (void *)advfs->superblock + ADVFS_BLOCK_SIZE * b;
-}
-
-/*
  * Resolve the block management data structure for the block number b
  */
 static advfs_block_mgt_t *
@@ -310,9 +301,9 @@ advfs_write_superblock(advfs_t *advfs, advfs_superblock_t *sb)
 int
 advfs_read_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
-    uint64_t *block;
+    void *block;
 
-    block = _get_block(advfs, pos);
+    block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * pos;
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
 
     return 0;
@@ -324,9 +315,9 @@ advfs_read_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 int
 advfs_write_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
-    uint64_t *block;
+    void *block;
 
-    block = _get_block(advfs, pos);
+    block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * pos;
     memcpy(block, buf, ADVFS_BLOCK_SIZE);
 
     return 0;
