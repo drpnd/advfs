@@ -303,6 +303,8 @@ advfs_read_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
     void *block;
 
+    assert( pos > 0 );
+
     block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * pos;
     memcpy(buf, block, ADVFS_BLOCK_SIZE);
 
@@ -316,6 +318,8 @@ int
 advfs_write_raw_block(advfs_t *advfs, void *buf, uint64_t pos)
 {
     void *block;
+
+    assert( pos > 0 );
 
     block = (void *)advfs->superblock + ADVFS_BLOCK_SIZE * pos;
     memcpy(block, buf, ADVFS_BLOCK_SIZE);
