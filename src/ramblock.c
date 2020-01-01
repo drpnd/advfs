@@ -214,8 +214,6 @@ _resolve_block_map(advfs_t *advfs, uint64_t inr, uint64_t pos)
     } else {
         /* Resolve from the chain */
         b = inode.blocks[ADVFS_INODE_BLOCKPTR - 1];
-        /* FIXME */
-        assert( b != 0 );
         advfs_read_raw_block(advfs, buf, b);
         block = (uint64_t *)buf;
         pos -= ADVFS_INODE_BLOCKPTR - 1;

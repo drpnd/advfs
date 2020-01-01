@@ -770,6 +770,7 @@ advfs_write(const char *path, const char *buf, size_t size, off_t offset,
     if ( 0 != ret ) {
         return -EFAULT;
     }
+    advfs_read_inode(advfs, &e, inr);
     if ( nsize > e.attr.size ) {
         e.attr.size = nsize;
     }
