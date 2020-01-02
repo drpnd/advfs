@@ -71,10 +71,10 @@ _increase_block(advfs_t *advfs, uint64_t inr, uint64_t nb)
                     return -1;
                 }
                 /* Add the block to the chain */
-                block[ADVFS_INODE_BLOCKPTR - 1] = b2;
+                block[pos] = b2;
             } else {
                 /* Get the next chain */
-                b2 = block[ADVFS_INODE_BLOCKPTR - 1];
+                b2 = block[pos];
             }
             advfs_read_raw_block(advfs, buf, b2);
             block = (uint64_t *)buf;
@@ -88,9 +88,9 @@ _increase_block(advfs_t *advfs, uint64_t inr, uint64_t nb)
                 if ( 0 == b2 ) {
                     return -1;
                 }
-                block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1] = b2;
+                block[pos] = b2;
             } else {
-                b2 = block[ADVFS_BLOCK_SIZE / sizeof(uint64_t) - 1];
+                b2 = block[pos];
             }
             advfs_read_raw_block(advfs, buf, b2);
             block = (uint64_t *)buf;
